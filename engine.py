@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 import uuid
@@ -205,6 +206,26 @@ def merge(input_paths: list[str], working_dir: str) -> str:
     ]
     _run_command(command, "Failed to merge clips")
     return output_path
+
+
+def extract_segments(
+    input_path: str,
+    working_dir: str,
+    segments: list[tuple[float, float]],
+) -> str:
+    if not segments:
+        raise VideoEngineError("At least one segment is required to extract highlights.")
+    normalized_segments = sorted(segments, key=lambda item: item[0])
+    trimmed_paths = [
+        trim(input_path, working_dir, start_sec=max(start_sec, 0.0), end_sec=max(end_sec, 0.0))
+        for start_sec, end_sec in normalized_segments
+        if end_sec > start_sec
+    ]
+    if not trimmed_paths:
+        raise VideoEngineError("No valid highlight segments were selected.")
+    if len(trimmed_paths) == 1:
+        return trimmed_paths[0]
+    return merge(trimmed_paths, working_dir)
 
 
 def _speed_audio_filter(factor: float) -> str:
@@ -484,6 +505,129 @@ def mute_segment(input_path: str, working_dir: str, start_sec: float, end_sec: f
         output_path,
     ]
     _run_command(command, "Failed to mute audio segment")
+    return output_path
+
+
+def trim_silence(
+    input_path: str,
+    working_dir: str,
+    min_silence_duration: float = 0.5,
+    silence_threshold_db: float = -35.0,
+) -> str:
+    command = [
+        config.FFMPEG_PATH,
+        "-i",
+        input_path,
+        "-af",
+        f"silencedetect=n={silence_threshold_db}dB:d={min_silence_duration}",
+        "-f",
+        "null",
+        "-",
+    ]
+    command_text = " ".join(command)
+    LOGGER.debug("Running ffmpeg command: %s", command_text)
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise VideoEngineError(
+            f"Failed to detect silence: {result.stderr.strip() or result.stdout.strip()}",
+            command=command_text,
+        )
+
+    silence_start_pattern = re.compile(r"silence_start:\s*([0-9.]+)")
+    silence_end_pattern = re.compile(r"silence_end:\s*([0-9.]+)")
+    silence_ranges: list[tuple[float, float]] = []
+    pending_start: float | None = None
+    for line in result.stderr.splitlines():
+        start_match = silence_start_pattern.search(line)
+        if start_match:
+            pending_start = float(start_match.group(1))
+            continue
+        end_match = silence_end_pattern.search(line)
+        if end_match and pending_start is not None:
+            silence_ranges.append((pending_start, float(end_match.group(1))))
+            pending_start = None
+
+    clip_duration = probe_video(input_path)["duration_sec"]
+    if pending_start is not None:
+        silence_ranges.append((pending_start, clip_duration))
+
+    keep_segments: list[tuple[float, float]] = []
+    cursor = 0.0
+    for silence_start, silence_end in silence_ranges:
+        if silence_start > cursor:
+            keep_segments.append((cursor, silence_start))
+        cursor = max(cursor, silence_end)
+    if cursor < clip_duration:
+        keep_segments.append((cursor, clip_duration))
+
+    keep_segments = [
+        (start_sec, end_sec)
+        for start_sec, end_sec in keep_segments
+        if end_sec - start_sec > 0.0
+    ]
+    if len(keep_segments) < 2:
+        return input_path
+    return extract_segments(input_path, working_dir, keep_segments)
+
+
+def _ass_color(value: str) -> str:
+    color_map = {
+        "white": "00FFFFFF",
+        "black": "00000000",
+        "yellow": "0000FFFF",
+        "red": "000000FF",
+        "green": "0000FF00",
+        "blue": "00FF0000",
+        "cyan": "00FFFF00",
+        "magenta": "00FF00FF",
+    }
+    return color_map.get(str(value).strip().lower(), color_map["white"])
+
+
+def _escape_subtitles_path(path: str) -> str:
+    normalized = Path(path).resolve().as_posix()
+    return normalized.replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+
+
+def burn_subtitles(
+    input_path: str,
+    working_dir: str,
+    srt_path: str,
+    font_size: int = 24,
+    font_color: str = "white",
+    outline_color: str = "black",
+    position: str = "bottom",
+) -> str:
+    output_path = _unique_path(working_dir, ".mp4")
+    position_styles = {
+        "bottom": {"Alignment": "2", "MarginV": "30"},
+        "center": {"Alignment": "5", "MarginV": "30"},
+        "top": {"Alignment": "8", "MarginV": "30"},
+    }
+    style = position_styles.get(position, position_styles["bottom"])
+    filter_path = _escape_subtitles_path(srt_path)
+    force_style = (
+        f"Fontsize={font_size},"
+        f"PrimaryColour=&H{_ass_color(font_color)},"
+        f"OutlineColour=&H{_ass_color(outline_color)},"
+        "Outline=2,"
+        f"Alignment={style['Alignment']},"
+        f"MarginV={style['MarginV']}"
+    )
+    command = [
+        config.FFMPEG_PATH,
+        "-i",
+        input_path,
+        "-vf",
+        f"subtitles='{filter_path}':force_style='{force_style}'",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
+        "-y",
+        output_path,
+    ]
+    _run_command(command, "Failed to burn subtitles into video")
     return output_path
 
 

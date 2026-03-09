@@ -9,6 +9,8 @@ from engine import (
     VideoEngineError,
     add_text,
     adjust_speed,
+    burn_subtitles,
+    extract_segments,
     fade_in,
     fade_out,
     merge,
@@ -16,6 +18,7 @@ from engine import (
     probe_video,
     replace_audio,
     trim,
+    trim_silence,
 )
 from state import ProjectState
 
@@ -89,6 +92,26 @@ def _reapply_operations(state: ProjectState) -> None:
             )
         elif name == "mute_segment":
             current_path = mute_segment(current_path, state.working_dir, params["start"], params["end"])
+        elif name == "trim_silence":
+            current_path = trim_silence(
+                current_path,
+                state.working_dir,
+                params.get("min_silence_duration", 0.5),
+                params.get("silence_threshold_db", -35.0),
+            )
+        elif name == "burn_subtitles":
+            current_path = burn_subtitles(
+                current_path,
+                state.working_dir,
+                srt_path=params["srt_path"],
+                font_size=params.get("font_size", 24),
+                font_color=params.get("font_color", "white"),
+                outline_color=params.get("outline_color", "black"),
+                position=params.get("position", "bottom"),
+            )
+        elif name == "summarize_clip":
+            segments = [(segment["start"], segment["end"]) for segment in params.get("segments", [])]
+            current_path = extract_segments(current_path, state.working_dir, segments)
     state.working_file = current_path
     state.metadata = probe_video(current_path)
     state.save()

@@ -1,7 +1,21 @@
 from __future__ import annotations
 
 from prompts import TOOL_SCHEMAS
-from tools import audio, export, info, merge, overlay, speed, transcript, transitions, trim, undo
+from tools import (
+    audio,
+    export,
+    info,
+    merge,
+    overlay,
+    silence,
+    speed,
+    subtitles,
+    summarize,
+    transcript,
+    transitions,
+    trim,
+    undo,
+)
 
 TOOL_EXECUTORS = {
     "get_video_info": info.execute,
@@ -13,6 +27,9 @@ TOOL_EXECUTORS = {
     "extract_audio": audio.execute_extract,
     "replace_audio": audio.execute_replace,
     "mute_segment": audio.execute_mute,
+    "trim_silence": silence.execute,
+    "burn_subtitles": subtitles.execute,
+    "summarize_clip": summarize.execute,
     "export_video": export.execute,
     "undo": undo.execute_undo,
     "redo": undo.execute_redo,
