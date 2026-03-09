@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from anthropic import Anthropic
+from google import genai
+from google.genai import types
 
+import config
 from engine import VideoEngineError, extract_segments, parse_timestamp, probe_video
 from state import ProjectState
 from tools.transcript import execute as transcribe
@@ -62,8 +63,60 @@ def _extract_json_array(raw_text: str) -> str:
     start = cleaned.find("[")
     end = cleaned.rfind("]")
     if start == -1 or end == -1 or end < start:
-        raise ValueError("Claude did not return a JSON array of segments.")
+        raise ValueError("The model did not return a JSON array of segments.")
     return cleaned[start : end + 1]
+
+
+def _select_segments_with_llm(
+    provider_name: str,
+    model_name: str,
+    target_duration_sec: float,
+    transcript_text: str,
+    formatted_transcript: str,
+) -> list[dict[str, float]]:
+    system_prompt = (
+        "You are a video editor. Given a transcript with timestamps, select the most engaging "
+        "and informative segments that fit within the target duration. Return ONLY a JSON array "
+        "of objects with 'start' and 'end' keys in seconds. No other text."
+    )
+    user_prompt = (
+        f"Target duration: {target_duration_sec} seconds.\n\n"
+        f"Transcript overview:\n{transcript_text}\n\n"
+        f"Transcript with timestamps:\n{formatted_transcript}\n\n"
+        "Select segments. Return JSON array only."
+    )
+
+    if provider_name == "claude":
+        from anthropic import Anthropic
+
+        client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        response = client.messages.create(
+            model=model_name or config.CLAUDE_MODEL,
+            max_tokens=2048,
+            system=system_prompt,
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+        raw_text = "".join(
+            block.text for block in response.content if getattr(block, "type", "") == "text"
+        )
+    else:
+        client = genai.Client(api_key=config.GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model=model_name or config.GEMINI_MODEL,
+            contents=user_prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_prompt,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        )
+        raw_text = getattr(response, "text", "") or ""
+
+    parsed = json.loads(_extract_json_array(raw_text))
+    return [
+        {"start": float(item["start"]), "end": float(item["end"])}
+        for item in parsed
+        if float(item["end"]) > float(item["start"])
+    ]
 
 
 def execute(params: dict, state: ProjectState) -> dict:
@@ -111,40 +164,25 @@ def execute(params: dict, state: ProjectState) -> dict:
 
     target_duration_sec = float(params.get("target_duration_sec", 60.0))
     formatted_transcript = _format_transcript(timestamped_segments)
+    provider_name = (state.provider or config.PROVIDER or "gemini").strip().lower()
+    if provider_name not in {"gemini", "claude"}:
+        provider_name = "gemini"
+    model_name = state.model or (
+        config.CLAUDE_MODEL if provider_name == "claude" else config.GEMINI_MODEL
+    )
 
     try:
-        client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        response = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=2048,
-            system=(
-                "You are a video editor. Given a transcript with timestamps, select the most engaging "
-                "and informative segments that fit within the target duration. Return ONLY a JSON array "
-                "of objects with 'start' and 'end' keys in seconds. No other text."
-            ),
-            messages=[
-                {
-                    "role": "user",
-                    "content": (
-                        f"Target duration: {target_duration_sec} seconds.\n\n"
-                        f"Transcript overview:\n{transcript_text}\n\n"
-                        f"Transcript with timestamps:\n{formatted_transcript}\n\n"
-                        "Select segments. Return JSON array only."
-                    ),
-                }
-            ],
+        selected_segments = _select_segments_with_llm(
+            provider_name=provider_name,
+            model_name=model_name,
+            target_duration_sec=target_duration_sec,
+            transcript_text=transcript_text,
+            formatted_transcript=formatted_transcript,
         )
-        raw_text = "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
-        parsed = json.loads(_extract_json_array(raw_text))
-        selected_segments = [
-            {"start": float(item["start"]), "end": float(item["end"])}
-            for item in parsed
-            if float(item["end"]) > float(item["start"])
-        ]
     except Exception as exc:
         return {
             "success": False,
-            "message": f"Failed to summarize clip with Claude: {exc}",
+            "message": f"Failed to summarize clip with {provider_name}: {exc}",
             "suggestion": None,
             "updated_state": state,
             "tool_name": "summarize_clip",
@@ -154,7 +192,7 @@ def execute(params: dict, state: ProjectState) -> dict:
     if not merged_segments:
         return {
             "success": False,
-            "message": "No valid highlight segments were returned by Claude.",
+            "message": f"No valid highlight segments were returned by {provider_name}.",
             "suggestion": None,
             "updated_state": state,
             "tool_name": "summarize_clip",
