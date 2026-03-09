@@ -88,7 +88,13 @@ Your exact path may differ depending on your Python install.
 Copy the example environment file and fill in the provider you want:
 
 ```bash
-copy .env.example .env
+cp .env.example .env
+```
+
+On Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
 ```
 
 Set one of:
@@ -371,4 +377,4 @@ Issues, bug reports, and PRs are welcome. If you report a bug, include:
 
 ## License
 
-Open source. Add your preferred OSS license file if you have not already chosen one.
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
