@@ -127,7 +127,7 @@ class GeminiProvider(BaseLLMProvider):
         if stream_callback is not None:
             text_chunks: list[str] = []
             raw_response = []
-            final_response = None
+            all_tool_calls: list[ToolCall] = []
             for chunk in self._client.models.generate_content_stream(
                 model=self._model_name,
                 contents=native_messages,
@@ -137,9 +137,8 @@ class GeminiProvider(BaseLLMProvider):
                 if getattr(chunk, "text", None):
                     text_chunks.append(chunk.text)
                     stream_callback(chunk.text)
-                final_response = chunk
-            tool_calls = self._extract_tool_calls(final_response) if final_response is not None else []
-            return LLMResponse(text="".join(text_chunks), tool_calls=tool_calls, raw=raw_response)
+                all_tool_calls.extend(self._extract_tool_calls(chunk))
+            return LLMResponse(text="".join(text_chunks), tool_calls=all_tool_calls, raw=raw_response)
 
         response = self._client.models.generate_content(
             model=self._model_name,
