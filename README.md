@@ -1,56 +1,80 @@
 # Vex
 
-Vex is an open-source AI video editing agent for the terminal. You talk to it in plain English, point at a video file, and it plans and executes editing operations on a safe working copy of your footage.
+Vex is an open-source AI video editing agent for the terminal.
 
-It supports interactive editing, persistent project state, undo/redo by timeline rebuild, preset exports, optional local transcription, and multi-provider LLM backends through a clean provider abstraction.
+You launch `vex`, talk to it in plain English, point at a video file, and it edits a safe working copy of your footage using FFmpeg, MoviePy, and an LLM-driven tool loop.
 
-## What Vex Can Do
-
-Vex can:
-
-- inspect video metadata
-- trim clips by natural-language timestamps
-- merge clips
-- change speed for a full clip or a segment
-- add fade in / fade out / fade-through-black transitions
-- add timed text overlays
-- extract, replace, mix, and mute audio
-- export for YouTube, Instagram, TikTok, X, podcast audio, or custom settings
-- transcribe video locally with Whisper
-- persist projects and resume later
-- undo and redo edits safely without touching originals
+It is built for people who want the speed of CLI workflows without giving up conversational editing.
 
 ## Why Vex
 
-- Natural language first: type what you want instead of memorizing editing commands
-- Original files stay untouched: all edits run against a working copy
-- Terminal-native workflow: fast, scriptable, and easy to automate
-- Provider-agnostic brain: Gemini or Claude behind the same editing loop
-- Stateful projects: close the terminal and continue later
+- Natural language first: tell Vex what you want instead of memorizing editing syntax
+- Zero-setup interaction: type `vex` and start talking
+- Original footage stays untouched: edits always happen on a project working copy
+- Stateful projects: resume later with timeline history intact
+- Real editing tools: trims, overlays, audio edits, subtitle burn-in, silence cleanup, exports, and more
+- Multi-provider ready: Gemini by default, Claude when you explicitly choose it
+- Terminal-native: fast, scriptable, and easy to integrate into your workflow
 
-## Quick Start
+## What Vex Can Do
 
-Install Vex in editable mode:
+### Core editing
 
-```bash
-pip install -e .
-```
+- Inspect video metadata
+- Trim clips by timestamp
+- Merge multiple clips
+- Adjust playback speed for a full clip or a selected segment
+- Add fade in, fade out, and fade-through-black transitions
+- Add timed text overlays
+- Remove silent gaps from raw footage
+- Extract selected highlight segments into a shorter cut
 
-Then launch it:
+### Audio
 
-```bash
-vex
-```
+- Extract audio as `mp3`, `wav`, or `aac`
+- Replace a video's audio track
+- Mix external audio with original audio
+- Mute a selected time range
 
-If no project is loaded, just type naturally and include a video path in your message:
+### Captions and transcript workflows
+
+- Transcribe video locally with Whisper
+- Generate `transcript.txt` and `transcript.srt`
+- Burn subtitles directly into the video from an SRT file
+- Auto-summarize long clips into highlight cuts using transcript-aware segment selection
+
+### Export and delivery
+
+- Export with built-in presets for YouTube, Instagram, TikTok, X, and podcast audio
+- Export directly from the REPL or from the CLI
+- Estimate output size and check disk space before export
+
+### Project system
+
+- Persistent saved projects
+- Auto-load a project when you mention a known video path
+- Deterministic project loading
+- Undo and redo through timeline rebuild
+- Timeline inspection and project summaries
+
+## The Intended Experience
+
+This is the default workflow:
 
 ```text
+> vex
+
+[Vex banner]
 Vex > trim the first 30 seconds of "D:\videos\clip.mp4"
+Vex > remove awkward pauses
+Vex > burn subtitles
 Vex > export it for instagram
 Vex > /quit
 ```
 
-If Vex already has exactly one saved project, it resumes it automatically. If you have multiple saved projects, Vex starts clean and waits for you to reference a file or explicitly open a project.
+You do not need to type subcommands inside the session.
+
+If no project is loaded, include a video path in your first message and Vex handles the rest.
 
 ## Installation
 
@@ -73,19 +97,27 @@ cd vex
 pip install -e .
 ```
 
-### Windows PATH Note
+After install, you should be able to launch Vex with:
 
-If `vex` is not recognized after install, add your Python user Scripts directory to `PATH`. In this environment it is:
+```bash
+vex
+```
+
+### Windows PATH note
+
+If `vex` is not recognized after install, add your Python Scripts directory to `PATH`.
+
+Example:
 
 ```text
 C:\Users\aarya\AppData\Roaming\Python\Python314\Scripts
 ```
 
-Your exact path may differ depending on your Python install.
+Your path may differ depending on your Python installation.
 
 ## Configuration
 
-Copy the example environment file and fill in the provider you want:
+Copy the environment example:
 
 ```bash
 cp .env.example .env
@@ -97,91 +129,151 @@ On Windows PowerShell:
 Copy-Item .env.example .env
 ```
 
-Set one of:
+Then configure your provider.
 
-- `PROVIDER=gemini`
-- `PROVIDER=claude`
+### Default provider
 
-Required keys:
+Vex defaults to Gemini.
 
-- Gemini: `GEMINI_API_KEY`
-- Claude: `ANTHROPIC_API_KEY`
+```env
+PROVIDER=gemini
+GEMINI_API_KEY=your_key_here
+```
 
-Important shared settings:
+### Claude support
 
+If you want Claude instead:
+
+```env
+PROVIDER=claude
+ANTHROPIC_API_KEY=your_key_here
+```
+
+### Important settings
+
+- `PROVIDER`
+- `GEMINI_API_KEY`
+- `GEMINI_MODEL`
+- `ANTHROPIC_API_KEY`
+- `CLAUDE_MODEL`
 - `AGENT_PROJECTS_DIR`
 - `FFMPEG_PATH`
 - `WHISPER_MODEL`
 
-## Everyday Usage
+## Quick Start
 
-### Zero-Setup Conversational Flow
+### First run
 
-This is the intended default experience:
+```bash
+vex
+```
+
+Then type a normal sentence with a video path:
 
 ```text
-> vex
-
-[Vex banner]
 Vex > trim the first 30 seconds of "D:\videos\clip.mp4"
-Vex > export it for instagram
+```
+
+Then continue naturally:
+
+```text
+Vex > remove the silent pauses
+Vex > add "DealScout" at the bottom for the first 4 seconds
+Vex > export it for youtube
 Vex > /quit
 ```
 
-Rules of thumb:
+### If a project already exists
 
-- In the REPL, type natural language
-- Include a video path when no video is loaded
-- Do not type `vex start ...` or `vex projects` inside the REPL
-- Use slash commands inside the REPL, not CLI commands
+- If exactly one saved project exists, Vex resumes it automatically
+- If multiple saved projects exist, Vex starts clean and waits for a file path or an explicit project command
+- If you mention a video path that already belongs to a saved project, Vex reuses that project instead of creating a duplicate
 
-### What to Type in the REPL
+## Natural-Language Examples
 
-Good:
-
-```text
-Vex > trim the first 5 seconds of "D:\videos\clip.mp4"
-Vex > add "TechWithAlex" at the bottom for the first 5 seconds
-Vex > mute from 0:12 to 0:18
-Vex > export it for youtube
-```
-
-Wrong inside the REPL:
+### Basic trim
 
 ```text
-Vex > vex start clip.mp4
-Vex > vex projects
-Vex > vex repl
+Vex > trim the first 15 seconds of "D:\videos\intro.mp4"
 ```
 
-Those are shell commands, not REPL messages.
+### Speed up a section
+
+```text
+Vex > speed up the section from 1:10 to 1:35 by 1.25x
+```
+
+### Remove pauses
+
+```text
+Vex > remove the silent gaps
+```
+
+### Add subtitles
+
+```text
+Vex > transcribe this video
+Vex > burn subtitles in yellow at the bottom
+```
+
+### Summarize a long video
+
+```text
+Vex > make this a 60 second highlight reel
+```
+
+### Export for social
+
+```text
+Vex > export it for instagram
+```
+
+## Full Tool Surface
+
+These are the editing tools Vex exposes to the agent loop.
+
+| Tool | What it does |
+|---|---|
+| `get_video_info` | Reads duration, resolution, fps, codec, audio presence, format, and size |
+| `trim_clip` | Trims the current working video to a selected range |
+| `merge_clips` | Concatenates the current working clip with one or more external clips |
+| `adjust_speed` | Changes playback speed globally or for a selected segment |
+| `add_transition` | Adds `fade_in`, `fade_out`, or fade-through-black style transitions |
+| `add_text_overlay` | Adds timed text overlays to the video |
+| `extract_audio` | Exports audio from the current working video |
+| `replace_audio` | Replaces or mixes audio with an external track |
+| `mute_segment` | Silences audio in a selected time range |
+| `trim_silence` | Detects and removes silent gaps from the video |
+| `burn_subtitles` | Burns subtitles from an SRT file directly into the video |
+| `transcribe_video` | Generates `transcript.txt` and `transcript.srt` using Whisper |
+| `summarize_clip` | Uses transcript-aware LLM selection to build a shorter highlight cut |
+| `export_video` | Exports the working video with a named preset |
+| `undo` | Rebuilds the project without the last operation |
+| `redo` | Reapplies the most recently undone operation |
 
 ## CLI Commands
 
-Vex has a conversational default mode plus power-user commands.
+Vex supports both a conversational mode and explicit power-user commands.
 
 ### `vex`
 
-Starts the interactive REPL.
+Start the interactive REPL.
 
 - resumes the only saved project automatically
-- otherwise waits for a natural-language instruction containing a video path
+- otherwise waits for natural-language input
+- if no video is loaded, include a file path in your message
 
 ### `vex start <video_path> [--name TEXT]`
 
-Explicitly create a new project from a video and drop into the REPL.
-
-Example:
+Create a new project explicitly and open the REPL.
 
 ```bash
-vex start "D:\videos\clip.mp4" --name "My Vlog"
+vex start "D:\videos\clip.mp4" --name "Launch Cut"
 ```
 
 ### `vex repl [--project TEXT]`
 
 Open the REPL for an existing project.
-
-Examples:
 
 ```bash
 vex repl
@@ -190,9 +282,7 @@ vex repl --project 7e5a4d1c
 
 ### `vex run "<instruction>" --project TEXT`
 
-Run one instruction against a saved project and exit.
-
-Example:
+Run a single instruction against a saved project and exit.
 
 ```bash
 vex run "export it for instagram" --project 7e5a4d1c
@@ -204,9 +294,7 @@ List saved projects.
 
 ### `vex export <preset_name> --project TEXT [--output TEXT]`
 
-Export directly without entering the REPL.
-
-Example:
+Export without entering the REPL.
 
 ```bash
 vex export instagram_reels --project 7e5a4d1c --output "D:\exports\clip.mp4"
@@ -218,15 +306,15 @@ Show the installed version.
 
 ## REPL Slash Commands
 
-These work only inside the interactive session:
+These commands work only inside the interactive session.
 
 | Command | Action |
 |---|---|
 | `/status` | Show the current project summary |
-| `/timeline` | Show the applied edit timeline |
+| `/timeline` | Show the applied timeline |
 | `/undo` | Undo the last edit |
 | `/redo` | Redo the last undone edit |
-| `/export <preset>` | Export immediately using a preset |
+| `/export <preset>` | Export immediately with a preset |
 | `/provider` | Show the active provider and model |
 | `/projects` | List saved projects |
 | `/help` | Show available slash commands |
@@ -247,101 +335,71 @@ Built-in presets:
 | `podcast_audio` | Audio-only podcast export | `mp3` |
 | `custom` | Start from your own settings | variable |
 
-## Real Examples
-
-### Trim a clip from scratch
-
-```text
-Vex > trim the first 30 seconds of "D:\videos\clip.mp4"
-```
-
-### Add a title card
-
-```text
-Vex > add "DealScout" at the bottom for the first 4 seconds
-```
-
-### Fix pacing
-
-```text
-Vex > speed up the section from 1:10 to 1:35 by 1.25x
-```
-
-### Export for social
-
-```text
-Vex > export it for instagram
-```
-
-### Direct shell-based workflow
-
-```bash
-vex start "D:\videos\clip.mp4"
-vex export youtube_1080p --project 7e5a4d1c
-```
-
 ## How Project Loading Works
 
-- Vex never edits your original file directly
-- each project keeps:
-  - original source file path
+- Vex never edits the original source file directly
+- each project stores:
+  - original source path
   - working copy path
-  - timeline of operations
-  - provider/model info
-  - session history
-- if you reference a video path in the REPL:
-  - Vex first checks whether a saved project already exists for that exact source file
-  - if yes, it loads that project
-  - if no, it creates a new project automatically
+  - timeline operations
+  - provider and model
+  - session log
+  - metadata
+- when you mention a video path in the REPL:
+  - Vex checks for an existing project for that exact source file
+  - if found, it loads that project
+  - otherwise, it creates a new project automatically
 
-Project state is stored in:
+Default project storage:
 
 ```text
 ~/.video-agent/projects/
 ```
 
-unless overridden via `AGENT_PROJECTS_DIR`.
+You can override that with `AGENT_PROJECTS_DIR`.
 
 ## Architecture
 
-Vex is organized into a few clear layers:
+| Path | Responsibility |
+|---|---|
+| `main.py` | CLI, REPL, auto-loading, slash commands, Rich terminal UI |
+| `agent.py` | Provider-agnostic agent loop and tool orchestration |
+| `providers/` | Gemini and Claude adapters behind one interface |
+| `tools/` | Agent-callable editing tools |
+| `engine.py` | FFmpeg and MoviePy operations |
+| `state.py` | Persistent project state and timeline history |
+| `presets/export_presets.json` | Built-in export presets |
 
-- `main.py`
-  CLI, REPL, auto-loading, slash commands, Rich terminal UX
-- `agent.py`
-  provider-agnostic agent loop and tool execution orchestration
-- `providers/`
-  Gemini and Claude adapters behind a shared interface
-- `tools/`
-  editing actions exposed to the model
-- `engine.py`
-  FFmpeg and MoviePy integration
-- `state.py`
-  persistent project model and undo/redo state
-- `presets/export_presets.json`
-  export targets for common platforms
-
-## Known Requirements and Limitations
+## Dependencies and Runtime Notes
 
 ### FFmpeg is mandatory
 
-Vex depends on FFmpeg for probing, trimming, merging, audio work, and export.
+Vex depends on FFmpeg for:
+
+- metadata probing
+- trims and merges
+- audio processing
+- subtitle burn-in
+- silence detection
+- exports
+
+### Whisper is optional
+
+`transcribe_video` requires `openai-whisper` and a local environment capable of running it.
 
 ### Text overlays on Windows may require ImageMagick
 
-`moviepy` text rendering on Windows can require ImageMagick.
+MoviePy text rendering on Windows can require ImageMagick.
 
-If timed text overlays fail, install ImageMagick from:
+If timed text overlays fail, install it from:
 
 ```text
 https://imagemagick.org/script/download.php#windows
 ```
 
-During installation, enable legacy utilities if prompted.
+### Subtitle burning depends on FFmpeg subtitle support
 
-### Whisper is optional
-
-`transcribe_video` works only if `openai-whisper` is installed and your environment can run it.
+Most FFmpeg builds support the `subtitles` filter. If yours does not, subtitle burn-in may fail until you install a build with subtitle filter support.
 
 ## Troubleshooting
 
@@ -351,30 +409,53 @@ Add your Python Scripts directory to `PATH`, then restart the terminal.
 
 ### `FFmpeg was not found in PATH`
 
-Install FFmpeg and verify `ffmpeg` works in the terminal before starting Vex.
+Install FFmpeg and verify `ffmpeg` works in the terminal before launching Vex.
 
 ### Vex says no video is loaded
 
-Type a normal sentence that includes a file path:
+Start with a normal sentence that includes a file path:
 
 ```text
 Vex > trim the first 10 seconds of "D:\videos\clip.mp4"
 ```
 
-### A random old project was loaded before
+### Subtitle burn-in fails
 
-That behavior has been tightened. Vex now only auto-resumes when there is exactly one saved project. If multiple projects exist, it starts clean.
+Check that:
+
+- your `transcript.srt` exists
+- your FFmpeg build supports the `subtitles` filter
+- the subtitle path is valid on your OS
+
+### Text overlay fails on Windows
+
+Install ImageMagick and retry.
+
+### Transcription fails
+
+Make sure Whisper is installed and usable in your Python environment.
+
+### Summarization does not work
+
+Make sure:
+
+- the active provider API key is configured
+- transcription completed successfully
+- `transcript.txt` and `transcript.srt` exist in the project working directory
 
 ## Contributing
 
-Issues, bug reports, and PRs are welcome. If you report a bug, include:
+Issues and PRs are welcome.
 
-- your OS
+If you report a bug, include:
+
+- OS
 - Python version
-- provider (`gemini` or `claude`)
+- active provider
 - the exact command or REPL input
-- the full traceback if one exists
+- the traceback or terminal output
+- whether the issue happens on a fresh project or a resumed project
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE).
