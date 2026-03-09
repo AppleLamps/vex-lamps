@@ -1,0 +1,90 @@
+{
+  "youtube_1080p": {
+    "description": "YouTube - 1080p HD",
+    "resolution": "1920x1080",
+    "video_codec": "libx264",
+    "audio_codec": "aac",
+    "video_bitrate": "8000k",
+    "audio_bitrate": "192k",
+    "fps": 30,
+    "format": "mp4",
+    "audio_only": false
+  },
+  "youtube_4k": {
+    "description": "YouTube - 4K UHD",
+    "resolution": "3840x2160",
+    "video_codec": "libx264",
+    "audio_codec": "aac",
+    "video_bitrate": "35000k",
+    "audio_bitrate": "320k",
+    "fps": 60,
+    "format": "mp4",
+    "audio_only": false
+  },
+  "instagram_reels": {
+    "description": "Instagram Reels / Stories - 9:16 vertical",
+    "resolution": "1080x1920",
+    "video_codec": "libx264",
+    "audio_codec": "aac",
+    "video_bitrate": "3500k",
+    "audio_bitrate": "128k",
+    "fps": 30,
+    "format": "mp4",
+    "audio_only": false
+  },
+  "instagram_square": {
+    "description": "Instagram Feed - 1:1 square",
+    "resolution": "1080x1080",
+    "video_codec": "libx264",
+    "audio_codec": "aac",
+    "video_bitrate": "3500k",
+    "audio_bitrate": "128k",
+    "fps": 30,
+    "format": "mp4",
+    "audio_only": false
+  },
+  "tiktok": {
+    "description": "TikTok - 9:16 vertical",
+    "resolution": "1080x1920",
+    "video_codec": "libx264",
+    "audio_codec": "aac",
+    "video_bitrate": "4000k",
+    "audio_bitrate": "128k",
+    "fps": 30,
+    "format": "mp4",
+    "audio_only": false
+  },
+  "twitter_x": {
+    "description": "Twitter / X - landscape",
+    "resolution": "1280x720",
+    "video_codec": "libx264",
+    "audio_codec": "aac",
+    "video_bitrate": "2000k",
+    "audio_bitrate": "128k",
+    "fps": 30,
+    "format": "mp4",
+    "audio_only": false
+  },
+  "podcast_audio": {
+    "description": "Podcast - audio only MP3",
+    "resolution": null,
+    "video_codec": null,
+    "audio_codec": "libmp3lame",
+    "video_bitrate": null,
+    "audio_bitrate": "256k",
+    "fps": null,
+    "format": "mp3",
+    "audio_only": true
+  },
+  "custom": {
+    "description": "Custom - pass settings via custom_settings param",
+    "resolution": null,
+    "video_codec": null,
+    "audio_codec": null,
+    "video_bitrate": null,
+    "audio_bitrate": null,
+    "fps": null,
+    "format": null,
+    "audio_only": false
+  }
+}
