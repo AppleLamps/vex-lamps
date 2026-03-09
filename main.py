@@ -65,7 +65,7 @@ def app_callback(
         provider = create_provider()
         projects = ProjectState.list_projects()
         state = None
-        if projects:
+        if len(projects) == 1:
             state = ProjectState.load(projects[0]["project_id"])
             console.print(
                 f"Resuming: [bold]{state.project_name}[/] (last edited {format_relative_time(state.updated_at)} ago)"
@@ -135,6 +135,15 @@ def is_loaded_source(state: ProjectState | None, candidate_path: str) -> bool:
         return False
     current_source = os.path.abspath(state.source_files[0])
     return os.path.normcase(current_source) == os.path.normcase(os.path.abspath(candidate_path))
+
+
+def find_project_for_source(video_path: str) -> ProjectState | None:
+    target = os.path.normcase(os.path.abspath(video_path))
+    for project in ProjectState.list_projects():
+        source_file = project.get("source_file", "")
+        if source_file and os.path.normcase(os.path.abspath(source_file)) == target:
+            return ProjectState.load(project["project_id"])
+    return None
 
 
 def create_project(video_path: str, name: str | None, provider_name: str, model_name: str) -> ProjectState:
@@ -338,7 +347,9 @@ def run_repl(state: ProjectState | None, provider) -> None:
         detected_path = detect_video_path(command)
         if detected_path and not is_loaded_source(state, detected_path):
             console.print(f"Loading: {Path(detected_path).name}...")
-            state = create_project(detected_path, None, config.PROVIDER, provider.model_name)
+            state = find_project_for_source(detected_path)
+            if state is None:
+                state = create_project(detected_path, None, config.PROVIDER, provider.model_name)
             agent = VideoAgent(state, provider)
         elif state is None:
             console.print("No video loaded. Drop a file path in your message to get started.")
