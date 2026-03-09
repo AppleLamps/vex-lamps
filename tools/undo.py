@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import shutil
+import uuid
+from pathlib import Path
 
 from engine import (
     VideoEngineError,
@@ -23,6 +26,13 @@ def _reapply_operations(state: ProjectState) -> None:
         raise VideoEngineError(
             f"Source file no longer exists at {source}. Cannot rebuild timeline."
         )
+    if not state.timeline:
+        fresh = Path(state.working_dir) / f"{uuid.uuid4().hex}{Path(source).suffix}"
+        shutil.copy2(source, fresh)
+        state.working_file = str(fresh)
+        state.metadata = probe_video(str(fresh))
+        state.save()
+        return
     current_path = source
     for op in state.timeline:
         params = op.get("params", {})

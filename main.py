@@ -60,12 +60,18 @@ def app_callback(
         raise typer.Exit()
     if ctx.invoked_subcommand is None:
         provider = create_provider()
-        try:
-            state = find_project(None)
-        except typer.BadParameter as exc:
-            console.print(str(exc), style="red")
-            console.print("Start a project with: vex start <video_path> [--name TEXT]")
-            raise typer.Exit(code=1) from exc
+        projects = ProjectState.list_projects()
+        if not projects:
+            console.print("Welcome to Vex! Drop a video file path to get started:")
+            video_path = console.input("[bold cyan]> [/] ").strip().strip('"').strip("'")
+            if not video_path or not os.path.isfile(video_path):
+                console.print(f"File not found: {video_path}", style="red")
+                raise typer.Exit(code=1)
+            state = create_project(video_path, None, config.PROVIDER, provider.model_name)
+            print_project_panel(state)
+        else:
+            state = ProjectState.load(projects[0]["project_id"])
+            console.print(f"Resuming: [bold]{state.project_name}[/]")
         run_repl(state, provider)
         raise typer.Exit()
 

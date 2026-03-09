@@ -83,7 +83,8 @@ class GeminiProvider(BaseLLMProvider):
                 )
             elif role == "assistant" and "tool_calls" in message:
                 native_messages.append(
-                    types.ModelContent(
+                    types.Content(
+                        role="model",
                         parts=[
                             types.Part.from_function_call(
                                 name=call["name"],
