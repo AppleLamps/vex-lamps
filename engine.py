@@ -635,7 +635,7 @@ def render_vertical_short(
     input_path: str,
     working_dir: str,
     srt_path: str | None = None,
-    subtitle_font_size: int = 11,
+    subtitle_font_size: int = 9,
     subtitle_font_color: str = "white",
     subtitle_outline_color: str = "black",
 ) -> str:
@@ -643,9 +643,10 @@ def render_vertical_short(
     filter_parts = [
         "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
         "crop=1080:1920,boxblur=20:2,eq=brightness=-0.10:saturation=1.15[bg]",
-        "[0:v]scale=1080:1460:force_original_aspect_ratio=decrease[fg]",
-        "[bg][fg]overlay=(W-w)/2:(H-h)/2-70[stage]",
-        "[stage]drawbox=x=70:y=1560:w=940:h=220:color=black@0.34:t=fill[base]",
+        "[bg]drawbox=x=0:y=1360:w=1080:h=560:color=black@0.28:t=fill[bgdim]",
+        "[bgdim]drawbox=x=56:y=1415:w=968:h=360:color=black@0.44:t=fill[bgpanel]",
+        "[0:v]scale=1080:1260:force_original_aspect_ratio=decrease[fg]",
+        "[bgpanel][fg]overlay=(W-w)/2:96[base]",
     ]
     if srt_path:
         filter_path = _escape_subtitles_path(srt_path)
@@ -653,16 +654,17 @@ def render_vertical_short(
             f"Fontsize={subtitle_font_size},"
             f"PrimaryColour=&H{_ass_color(subtitle_font_color)},"
             f"OutlineColour=&H{_ass_color(subtitle_outline_color)},"
-            "BackColour=&H5A000000,"
+            "BackColour=&H78000000,"
             "Bold=1,"
-            "Outline=1.2,"
+            "Outline=1,"
             "Shadow=0,"
             "BorderStyle=4,"
             "Alignment=2,"
-            "MarginL=90,"
-            "MarginR=90,"
-            "MarginV=82,"
-            "Spacing=0.15"
+            "MarginL=118,"
+            "MarginR=118,"
+            "MarginV=118,"
+            "Spacing=0.2,"
+            "WrapStyle=2"
         )
         filter_parts.append(
             f"[base]subtitles='{filter_path}':original_size=1080x1920:force_style='{force_style}'[v]"
