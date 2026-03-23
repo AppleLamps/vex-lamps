@@ -266,6 +266,38 @@ def direct_export(state: ProjectState, preset_name: str, output: str | None = No
     console.print(f"Saved: {output_path} ({format_bytes(os.path.getsize(output_path))})")
 
 
+def direct_auto_shorts(
+    state: ProjectState,
+    count: int,
+    min_duration_sec: float,
+    max_duration_sec: float,
+    target_platform: str,
+    include_compilation: bool,
+) -> None:
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        console=console,
+        transient=True,
+    )
+    with progress:
+        progress.add_task("Creating auto shorts...", total=None)
+        result = TOOL_EXECUTORS["create_auto_shorts"](
+            {
+                "count": count,
+                "min_duration_sec": min_duration_sec,
+                "max_duration_sec": max_duration_sec,
+                "target_platform": target_platform,
+                "include_compilation": include_compilation,
+            },
+            state,
+        )
+    if not result["success"]:
+        console.print(result["message"], style="red")
+        raise typer.Exit(code=1)
+    console.print(result["message"])
+
+
 def run_repl(state: ProjectState | None, provider) -> None:
     agent = VideoAgent(state, provider) if state is not None else None
     while True:
@@ -450,6 +482,32 @@ def export(
     initialize_runtime()
     state = ProjectState.load(project)
     direct_export(state, preset_name, output)
+
+
+@app.command()
+def shorts(
+    project: str = typer.Option(..., help="Project id."),
+    count: int = typer.Option(3, help="Number of shorts to create."),
+    min_duration_sec: float = typer.Option(20.0, help="Minimum duration per short."),
+    max_duration_sec: float = typer.Option(45.0, help="Maximum duration per short."),
+    target_platform: str = typer.Option(
+        "youtube_shorts",
+        help="Platform profile: youtube_shorts, tiktok, or instagram_reels.",
+    ),
+    include_compilation: bool = typer.Option(True, help="Also create a merged compilation."),
+) -> None:
+    initialize_runtime()
+    if target_platform not in {"youtube_shorts", "tiktok", "instagram_reels"}:
+        raise typer.BadParameter("target_platform must be one of: youtube_shorts, tiktok, instagram_reels")
+    state = ProjectState.load(project)
+    direct_auto_shorts(
+        state,
+        count=count,
+        min_duration_sec=min_duration_sec,
+        max_duration_sec=max_duration_sec,
+        target_platform=target_platform,
+        include_compilation=include_compilation,
+    )
 
 
 if __name__ == "__main__":

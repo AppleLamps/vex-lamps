@@ -14,6 +14,7 @@ Rules:
 7. If the request is ambiguous, ask exactly one clarifying question before acting.
 8. Keep responses plain text, concise, and REPL-friendly.
 9. When the user replies 'yes' after a [SUGGESTION], apply it immediately.
+10. When the user asks for reels, TikToks, YouTube Shorts, viral clips, or auto-cut social highlights, prefer create_auto_shorts over summarize_clip.
 
 --- CURRENT PROJECT STATE ---
 Project: {project_name}
@@ -220,6 +221,37 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                     "type": "number",
                     "description": "Target output duration in seconds. Default 60.",
                 }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "create_auto_shorts",
+        "description": "Create multiple short-form vertical clips from the current working video. Auto-transcribes if needed, ranks the most interesting moments with the active reasoning model, packages each short with captions and metadata, and writes a manifest bundle to the project's output directory.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "count": {
+                    "type": "integer",
+                    "description": "How many shorts to generate. Default 3.",
+                },
+                "min_duration_sec": {
+                    "type": "number",
+                    "description": "Minimum duration per short. Default 20.",
+                },
+                "max_duration_sec": {
+                    "type": "number",
+                    "description": "Maximum duration per short. Default 45.",
+                },
+                "target_platform": {
+                    "type": "string",
+                    "enum": ["youtube_shorts", "tiktok", "instagram_reels"],
+                    "description": "Platform profile used for packaging and metadata. Default youtube_shorts.",
+                },
+                "include_compilation": {
+                    "type": "boolean",
+                    "description": "Whether to also render a merged compilation of the generated shorts. Default true.",
+                },
             },
             "required": [],
         },

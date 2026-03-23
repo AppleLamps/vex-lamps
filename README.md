@@ -42,6 +42,7 @@ It is built for people who want the speed of CLI workflows without giving up con
 - Generate `transcript.txt` and `transcript.srt`
 - Burn subtitles directly into the video from an SRT file
 - Auto-summarize long clips into highlight cuts using transcript-aware segment selection
+- Auto-create multiple vertical shorts with captions, ranking, hooks, metadata, and a bundle manifest
 
 ### Export and delivery
 
@@ -222,6 +223,12 @@ Vex > burn subtitles in yellow at the bottom
 Vex > make this a 60 second highlight reel
 ```
 
+### Create viral-style shorts
+
+```text
+Vex > turn this podcast into 4 YouTube Shorts with captions
+```
+
 ### Export for social
 
 ```text
@@ -247,6 +254,7 @@ These are the editing tools Vex exposes to the agent loop.
 | `burn_subtitles` | Burns subtitles from an SRT file directly into the video |
 | `transcribe_video` | Generates `transcript.txt` and `transcript.srt` using Whisper |
 | `summarize_clip` | Uses transcript-aware LLM selection to build a shorter highlight cut |
+| `create_auto_shorts` | Builds multiple ranked vertical shorts with transcript analysis, captions, metadata, and a manifest bundle |
 | `export_video` | Exports the working video with a named preset |
 | `undo` | Rebuilds the project without the last operation |
 | `redo` | Reapplies the most recently undone operation |
@@ -258,6 +266,14 @@ Vex supports both a conversational mode and explicit power-user commands.
 ### `vex`
 
 Start the interactive REPL.
+
+### `vex shorts`
+
+Generate a packaged shorts bundle directly from an existing project.
+
+```bash
+vex shorts --project <project-id> --count 4 --target-platform youtube_shorts
+```
 
 - resumes the only saved project automatically
 - otherwise waits for natural-language input

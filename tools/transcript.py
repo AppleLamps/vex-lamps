@@ -4,14 +4,7 @@ from pathlib import Path
 
 import config
 from state import ProjectState
-
-
-def _format_srt_timestamp(seconds: float) -> str:
-    milliseconds = int(round(seconds * 1000))
-    hours, remainder = divmod(milliseconds, 3_600_000)
-    minutes, remainder = divmod(remainder, 60_000)
-    secs, millis = divmod(remainder, 1000)
-    return f"{hours:02}:{minutes:02}:{secs:02},{millis:03}"
+from tools.transcript_utils import format_srt_timestamp
 
 
 def execute(params: dict, state: ProjectState) -> dict:
@@ -37,14 +30,14 @@ def execute(params: dict, state: ProjectState) -> dict:
         srt_lines.extend(
             [
                 str(index),
-                f"{_format_srt_timestamp(segment['start'])} --> {_format_srt_timestamp(segment['end'])}",
+                f"{format_srt_timestamp(segment['start'])} --> {format_srt_timestamp(segment['end'])}",
                 segment["text"].strip(),
                 "",
             ]
         )
     srt_path.write_text("\n".join(srt_lines), encoding="utf-8")
     preview = "\n".join(
-        f"{_format_srt_timestamp(segment['start'])} {segment['text'].strip()}" for segment in segments[:10]
+        f"{format_srt_timestamp(segment['start'])} {segment['text'].strip()}" for segment in segments[:10]
     )
     return {
         "success": True,

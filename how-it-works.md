@@ -59,6 +59,17 @@ Vex currently supports all of the following.
 - generate `transcript.srt`
 - burn subtitles into video
 - summarize a long clip into highlights using transcript-aware LLM selection
+- auto-create ranked vertical shorts with captions, metadata, and a manifest bundle
+
+### Auto shorts packaging
+
+The auto shorts flow is intentionally separate from normal timeline editing.
+
+- it transcribes the full working video when transcript artifacts do not already exist
+- it mines timestamped transcript windows into candidate clips before handing them to the active reasoning model
+- it writes packaged outputs to the project's output directory instead of replacing the working file
+- each generated short gets a raw clip, vertical captioned render, local transcript, metadata JSON, and notes
+- the run also writes a manifest bundle and stores the latest manifest path inside project artifacts
 
 ### Project and workflow features
 
@@ -123,6 +134,7 @@ The Typer app exposes:
 - `vex run`
 - `vex projects`
 - `vex export`
+- `vex shorts`
 - `vex --version`
 
 The default mode is `vex` with no subcommand.

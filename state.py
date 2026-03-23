@@ -28,6 +28,7 @@ class ProjectState:
     redo_stack: list[dict[str, Any]] = field(default_factory=list)
     session_log: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    artifacts: dict[str, Any] = field(default_factory=dict)
     provider: str = "gemini"
     model: str = ""
 
@@ -138,6 +139,12 @@ class ProjectState:
             f"Timeline operations: {len(self.timeline)}",
             f"Redo available: {len(self.redo_stack)}",
         ]
+        latest_auto_shorts = (self.artifacts or {}).get("latest_auto_shorts")
+        if latest_auto_shorts:
+            lines.append(
+                "Latest auto shorts: "
+                f"{latest_auto_shorts.get('count', 0)} clips @ {latest_auto_shorts.get('manifest_path', 'unknown')}"
+            )
         if self.timeline:
             lines.append("Timeline:")
             for index, op in enumerate(self.timeline, start=1):

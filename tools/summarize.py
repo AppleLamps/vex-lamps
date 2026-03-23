@@ -9,29 +9,10 @@ from google import genai
 from google.genai import types
 
 import config
-from engine import VideoEngineError, extract_segments, parse_timestamp, probe_video
+from engine import VideoEngineError, extract_segments, probe_video
 from state import ProjectState
 from tools.transcript import execute as transcribe
-
-
-def _parse_srt(path: Path) -> list[dict[str, float | str]]:
-    blocks = re.split(r"\r?\n\r?\n", path.read_text(encoding="utf-8").strip())
-    segments: list[dict[str, float | str]] = []
-    for block in blocks:
-        lines = [line.strip() for line in block.splitlines() if line.strip()]
-        if len(lines) < 3:
-            continue
-        timestamp_line = next((line for line in lines if "-->" in line), "")
-        if not timestamp_line:
-            continue
-        start_raw, end_raw = [part.strip().replace(",", ".") for part in timestamp_line.split("-->", 1)]
-        start_sec = parse_timestamp(start_raw)
-        end_sec = parse_timestamp(end_raw)
-        text_start = lines.index(timestamp_line) + 1
-        text = " ".join(lines[text_start:]).strip()
-        if text and end_sec > start_sec:
-            segments.append({"start": start_sec, "end": end_sec, "text": text})
-    return segments
+from tools.transcript_utils import parse_srt
 
 
 def _format_transcript(segments: list[dict[str, float | str]]) -> str:
@@ -152,7 +133,7 @@ def execute(params: dict, state: ProjectState) -> dict:
             "tool_name": "summarize_clip",
         }
 
-    timestamped_segments = _parse_srt(srt_path)
+    timestamped_segments = parse_srt(srt_path)
     if not timestamped_segments:
         return {
             "success": False,

@@ -631,6 +631,59 @@ def burn_subtitles(
     return output_path
 
 
+def render_vertical_short(
+    input_path: str,
+    working_dir: str,
+    srt_path: str | None = None,
+    subtitle_font_size: int = 18,
+    subtitle_font_color: str = "white",
+    subtitle_outline_color: str = "black",
+) -> str:
+    output_path = _unique_path(working_dir, ".mp4")
+    filter_parts = [
+        "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+        "crop=1080:1920,boxblur=20:2,eq=brightness=-0.10:saturation=1.15[bg]",
+        "[0:v]scale=1080:1400:force_original_aspect_ratio=decrease[fg]",
+        "[bg][fg]overlay=(W-w)/2:(H-h)/2-120[base]",
+    ]
+    if srt_path:
+        filter_path = _escape_subtitles_path(srt_path)
+        force_style = (
+            f"Fontsize={subtitle_font_size},"
+            f"PrimaryColour=&H{_ass_color(subtitle_font_color)},"
+            f"OutlineColour=&H{_ass_color(subtitle_outline_color)},"
+            "Outline=3,"
+            "Alignment=2,"
+            "MarginV=110"
+        )
+        filter_parts.append(f"[base]subtitles='{filter_path}':force_style='{force_style}'[v]")
+    else:
+        filter_parts.append("[base]null[v]")
+    command = [
+        config.FFMPEG_PATH,
+        "-i",
+        input_path,
+        "-filter_complex",
+        ";".join(filter_parts),
+        "-map",
+        "[v]",
+        "-map",
+        "0:a?",
+        "-c:v",
+        "libx264",
+        "-c:a",
+        "aac",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-y",
+        output_path,
+    ]
+    _run_command(command, "Failed to render vertical short")
+    return output_path
+
+
 def export(
     input_path: str,
     output_path: str,
