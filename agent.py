@@ -30,6 +30,27 @@ class VideoAgent:
     def _extract_suggestions(self, text: str) -> list[str]:
         return [line.strip() for line in text.splitlines() if line.strip().startswith("[SUGGESTION]:")]
 
+    def _inject_tool_failures(self, text: str, tool_failures: list[dict[str, str]]) -> str:
+        if not tool_failures:
+            return text
+        summaries: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        for failure in tool_failures[-3:]:
+            key = (failure["tool_name"], failure["message"])
+            if key in seen:
+                continue
+            seen.add(key)
+            summaries.append(f"{failure['tool_name']}: {failure['message']}")
+        if not summaries:
+            return text
+        normalized = text.strip().lower()
+        if all(summary.lower() in normalized for summary in summaries):
+            return text
+        failure_block = "Actual tool error" + ("s" if len(summaries) > 1 else "") + ":\n" + "\n".join(
+            f"- {summary}" for summary in summaries
+        )
+        return f"{text.strip()}\n\n{failure_block}".strip()
+
     def run(
         self,
         user_message: str,
@@ -38,6 +59,7 @@ class VideoAgent:
     ) -> AgentResponse:
         self.conversation.append({"role": "user", "content": user_message})
         tools_called: list[str] = []
+        tool_failures: list[dict[str, str]] = []
         final_text = ""
         success = True
         for _ in range(10):
@@ -85,6 +107,14 @@ class VideoAgent:
                             }
                             success = False
                     self.state = result["updated_state"]
+                    if not bool(result.get("success")):
+                        success = False
+                        tool_failures.append(
+                            {
+                                "tool_name": str(result.get("tool_name", call.name)),
+                                "message": str(result.get("message", "Tool failed without an error message.")),
+                            }
+                        )
                     if tool_callback:
                         tool_callback("finish", call.name, bool(result.get("success")))
                     self.conversation.append(
@@ -95,7 +125,7 @@ class VideoAgent:
                         )
                     )
                 continue
-            final_text = response.text.strip()
+            final_text = self._inject_tool_failures(response.text.strip(), tool_failures)
             suggestions = self._extract_suggestions(final_text)
             self.conversation.append({"role": "assistant", "content": final_text})
             self.state.session_log = self.conversation
