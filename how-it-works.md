@@ -662,12 +662,14 @@ What it does:
 1. ensures `transcript.srt` exists, auto-transcribing if needed
 2. asks the active reasoning model for the strongest B-roll beats and search queries
 3. falls back to heuristic beat selection if the model output is unusable
-4. searches Pexels videos with `PEXELS_API_KEY`
-5. picks the best MP4 asset for the project orientation and resolution
-6. caches the downloaded stock clips in the project working directory
-7. splices those clips over the selected time ranges while preserving original audio
-8. writes a manifest and `pexels_attribution.md` into an output bundle
-9. records the operation on the project timeline
+4. builds subtitle-aligned cards so each insert is anchored to an active spoken beat
+5. searches Pexels videos with `PEXELS_API_KEY`
+6. reranks the returned candidates against subtitle text and nearby transcript context
+7. picks the best MP4 asset for the project orientation and resolution
+8. caches the downloaded stock clips in a writable project or fallback cache directory
+9. splices those clips over the selected time ranges while preserving original audio
+10. writes a manifest, notes, and `pexels_attribution.md` into an output bundle
+11. records the operation on the project timeline
 
 #### `burn_subtitles`
 

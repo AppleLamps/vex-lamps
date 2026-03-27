@@ -260,7 +260,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "add_auto_broll",
-        "description": "Plan transcript-aware B-roll beats, fetch matching stock clips from Pexels, and splice them into the current working video while preserving the original audio.",
+        "description": "Plan subtitle-aligned, transcript-aware B-roll beats, fetch matching stock clips from Pexels, semantically rerank the results, and splice them into the current working video while preserving the original audio.",
         "parameters": {
             "type": "object",
             "properties": {

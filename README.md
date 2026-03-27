@@ -45,7 +45,7 @@ It is built for people who want the speed of CLI workflows without giving up con
 - Auto-create multiple vertical shorts with captions, ranking, hooks, metadata, and a bundle manifest
 - Score each generated short with explainable viral factors
 - Generate timestamped B-roll suggestions for each short
-- Fetch and splice transcript-aware stock B-roll from Pexels into the working video
+- Fetch and splice subtitle-aligned, transcript-aware stock B-roll from Pexels into the working video
 - Add transcript-driven punch-in moments for emphasis inside generated shorts
 
 ### Export and delivery
@@ -274,7 +274,7 @@ These are the editing tools Vex exposes to the agent loop.
 | `transcribe_video` | Generates `transcript.txt` and `transcript.srt` using Whisper |
 | `summarize_clip` | Uses transcript-aware LLM selection to build a shorter highlight cut |
 | `create_auto_shorts` | Builds multiple ranked vertical shorts with transcript analysis, captions, metadata, and a manifest bundle |
-| `add_auto_broll` | Plans transcript-aware B-roll beats, fetches matching Pexels stock clips, and splices them into the current working video |
+| `add_auto_broll` | Plans subtitle-aligned B-roll beats, reranks matching Pexels stock clips against transcript context, and splices them into the current working video |
 | `export_video` | Exports the working video with a named preset |
 | `undo` | Rebuilds the project without the last operation |
 | `redo` | Reapplies the most recently undone operation |
