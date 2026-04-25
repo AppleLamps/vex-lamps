@@ -48,6 +48,50 @@ class ProjectState:
         return cls(**filtered)
 
     @classmethod
+    def _coerce_project_payload(cls, payload: object) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        required = {
+            "project_id",
+            "project_name",
+            "created_at",
+            "updated_at",
+            "source_files",
+            "working_file",
+            "working_dir",
+            "output_dir",
+        }
+        if not required.issubset(payload.keys()):
+            return None
+        if not isinstance(payload.get("project_id"), str) or not payload.get("project_id"):
+            return None
+        if not isinstance(payload.get("project_name"), str):
+            return None
+        if not isinstance(payload.get("source_files"), list):
+            return None
+        if not isinstance(payload.get("working_file"), str):
+            return None
+        if not isinstance(payload.get("working_dir"), str):
+            return None
+        if not isinstance(payload.get("output_dir"), str):
+            return None
+        return payload
+
+    @classmethod
+    def _load_project_payload(cls, path: Path) -> dict[str, Any] | None:
+        try:
+            raw_payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        payload = cls._coerce_project_payload(raw_payload)
+        if payload is None:
+            return None
+        expected_name = f"{payload['project_id']}.json"
+        if path.name != expected_name:
+            return None
+        return payload
+
+    @classmethod
     def load(cls, project_id: str) -> "ProjectState":
         base = Path(config.AGENT_PROJECTS_DIR)
         candidates = list(base.glob(f"*/{project_id}.json"))
@@ -57,18 +101,17 @@ class ProjectState:
             raise FileNotFoundError(f"No project found for id {project_id!r}.")
         if len(candidates) > 1:
             def sort_key(path: Path) -> str:
-                try:
-                    payload = json.loads(path.read_text(encoding="utf-8"))
-                except (OSError, json.JSONDecodeError):
-                    return ""
-                return payload.get("updated_at", "")
+                payload = cls._load_project_payload(path)
+                return str(payload.get("updated_at", "")) if payload else ""
 
             candidates.sort(key=sort_key, reverse=True)
             warnings.warn(
                 f"Multiple projects matched partial id {project_id!r}; using the most recently updated match.",
                 stacklevel=2,
             )
-        payload = json.loads(candidates[0].read_text(encoding="utf-8"))
+        payload = cls._load_project_payload(candidates[0])
+        if payload is None:
+            raise FileNotFoundError(f"Found a matching file for project id {project_id!r}, but it is not a valid project state.")
         return cls.from_dict(payload)
 
     @classmethod
@@ -77,9 +120,8 @@ class ProjectState:
         base.mkdir(parents=True, exist_ok=True)
         items: list[dict[str, Any]] = []
         for path in base.glob("*/*.json"):
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
+            payload = cls._load_project_payload(path)
+            if payload is None:
                 continue
             items.append(
                 {
