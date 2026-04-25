@@ -10,6 +10,12 @@ class VisualRendererError(RuntimeError):
 
 
 @dataclass
+class RendererStatus:
+    available: bool
+    reason: str = ""
+
+
+@dataclass
 class RenderedAsset:
     asset_path: str
     width: int
@@ -22,6 +28,7 @@ class RenderedAsset:
 
 class VisualRenderer:
     name = "base"
+    supported_templates: set[str] = set()
 
     def render(
         self,
@@ -32,3 +39,25 @@ class VisualRenderer:
         fps: float,
     ) -> RenderedAsset:
         raise NotImplementedError
+
+    def availability(self) -> RendererStatus:
+        return RendererStatus(True, "")
+
+    def supports(self, spec: dict[str, Any]) -> bool:
+        if not self.supported_templates:
+            return True
+        return str(spec.get("template") or "").strip().lower() in self.supported_templates
+
+    def score_spec(self, spec: dict[str, Any]) -> float:
+        if not self.supports(spec):
+            return -1.0
+        return 0.5
+
+    def capability_summary(self) -> dict[str, Any]:
+        status = self.availability()
+        return {
+            "name": self.name,
+            "available": status.available,
+            "reason": status.reason,
+            "supported_templates": sorted(self.supported_templates),
+        }

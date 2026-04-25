@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import re
 import subprocess
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from engine import probe_video
-from renderers.base import RenderedAsset, VisualRenderer, VisualRendererError
+from renderers.base import RenderedAsset, RendererStatus, VisualRenderer, VisualRendererError
 
 
 def _safe_scene_name(spec_id: str) -> str:
@@ -193,6 +194,68 @@ class {scene_name}(Scene):
             self.wait(settle)
             return
 
+        if template == "system_flow":
+            steps = [str(item).strip() for item in (SPEC.get("steps") or []) if str(item).strip()][:4]
+            steps = steps or [str(SPEC.get("headline") or "Input"), str(SPEC.get("emphasis_text") or "Process"), "Output"]
+            nodes = VGroup()
+            for index, step in enumerate(steps, start=1):
+                circle = Circle(radius=0.8)
+                circle.set_fill(ManimColor(panel_fill), opacity=1.0)
+                circle.set_stroke(ManimColor(panel_stroke), width=3)
+                number = Text(str(index), font_size=24, color=ManimColor(accent_color), weight=BOLD)
+                number.next_to(circle.get_top(), DOWN, buff=0.26)
+                label = clamp_text(step, max_width=1.7, max_font_size=24, min_font_size=16, color=primary)
+                label.move_to(circle.get_center() + DOWN * 0.08)
+                nodes.add(VGroup(circle, number, label))
+            nodes.arrange(RIGHT, buff=1.0)
+            connectors = VGroup()
+            for index in range(len(nodes) - 1):
+                arrow = CurvedArrow(
+                    nodes[index].get_right() + RIGHT * 0.12,
+                    nodes[index + 1].get_left() + LEFT * 0.12,
+                    angle=-0.25,
+                    color=ManimColor(accent_color),
+                    stroke_width=5,
+                )
+                connectors.add(arrow)
+            scene_group = VGroup(nodes, connectors)
+            scene_group.move_to(ORIGIN + DOWN * 0.1)
+            footer = clamp_text(footer_text_value, max_width=10.8, max_font_size=24, min_font_size=16, color=secondary, weight=MEDIUM)
+            footer.next_to(scene_group, DOWN, buff=0.6)
+            if headline_text:
+                self.play(FadeIn(headline, shift=UP * 0.2), run_time=intro)
+            self.play(LaggedStart(*[GrowFromCenter(node) for node in nodes], lag_ratio=0.12), run_time=accent)
+            if len(connectors) > 0:
+                self.play(LaggedStart(*[Create(arrow) for arrow in connectors], lag_ratio=0.12), run_time=reveal)
+            if footer_text_value:
+                self.play(FadeIn(footer, shift=UP * 0.08), run_time=0.3)
+            self.wait(settle)
+            return
+
+        if template == "stat_grid":
+            metrics = [str(SPEC.get("emphasis_text") or "Key stat").strip()]
+            metrics.extend([str(item).strip() for item in (SPEC.get("supporting_lines") or []) if str(item).strip()][:3])
+            keywords = [str(item).strip() for item in (SPEC.get("keywords") or []) if str(item).strip()]
+            while len(metrics) < 4:
+                metrics.append(keywords[len(metrics) - 1] if len(keywords) >= len(metrics) else "Insight")
+            cards = VGroup()
+            for metric in metrics[:4]:
+                box = RoundedRectangle(corner_radius=0.2, width=4.4, height=2.1)
+                box.set_fill(ManimColor(panel_fill), opacity=1.0)
+                box.set_stroke(ManimColor(panel_stroke), width=2.5)
+                label = clamp_text(metric, max_width=3.6, max_font_size=28, min_font_size=18, color=primary)
+                label.move_to(box.get_center())
+                cards.add(VGroup(box, label))
+            grid = VGroup(cards[0], cards[1]).arrange(RIGHT, buff=0.45)
+            lower = VGroup(cards[2], cards[3]).arrange(RIGHT, buff=0.45)
+            layout = VGroup(grid, lower).arrange(DOWN, buff=0.45)
+            layout.move_to(ORIGIN + DOWN * 0.18)
+            if headline_text:
+                self.play(FadeIn(headline, shift=UP * 0.2), run_time=intro)
+            self.play(LaggedStart(*[FadeIn(card, scale=0.94) for card in cards], lag_ratio=0.1), run_time=accent + reveal)
+            self.wait(settle)
+            return
+
         quote = clamp_text(str(SPEC.get("quote_text") or SPEC.get("emphasis_text") or SPEC.get("headline") or "Key quote"), max_width=10.8, max_font_size=54, min_font_size=26, color=primary)
         quote.move_to(ORIGIN)
         bars = VGroup(
@@ -214,6 +277,37 @@ class {scene_name}(Scene):
 
 class ManimRenderer(VisualRenderer):
     name = "manim"
+    supported_templates = {
+        "metric_callout",
+        "keyword_stack",
+        "timeline_steps",
+        "comparison_split",
+        "quote_focus",
+        "system_flow",
+        "stat_grid",
+    }
+
+    def availability(self) -> RendererStatus:
+        if importlib.util.find_spec("manim") is None:
+            return RendererStatus(False, "Manim is not installed in the current Python environment.")
+        return RendererStatus(True, "")
+
+    def score_spec(self, spec: dict[str, Any]) -> float:
+        if not self.supports(spec):
+            return -1.0
+        template = str(spec.get("template") or "")
+        visual_hint = str(spec.get("visual_type_hint") or "")
+        composition = str(spec.get("composition_mode") or "")
+        score = 0.78
+        if template in {"timeline_steps", "system_flow", "comparison_split", "stat_grid"}:
+            score += 0.12
+        if visual_hint in {"data_graphic", "process"}:
+            score += 0.08
+        if visual_hint == "product_ui":
+            score -= 0.14
+        if composition == "replace":
+            score += 0.04
+        return round(score, 3)
 
     def render(
         self,
@@ -223,6 +317,9 @@ class ManimRenderer(VisualRenderer):
         height: int,
         fps: float,
     ) -> RenderedAsset:
+        status = self.availability()
+        if not status.available:
+            raise VisualRendererError(status.reason)
         spec_id = str(spec.get("visual_id") or spec.get("id") or "visual")
         job_dir = render_root / spec_id
         job_dir.mkdir(parents=True, exist_ok=True)

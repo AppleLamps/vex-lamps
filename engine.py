@@ -577,31 +577,21 @@ def _normalize_visual_overlays(
     return normalized
 
 
-def _pip_overlay_position(
-    position: str,
-    target_width: int,
-    target_height: int,
-    overlay_width: int,
-    overlay_height: int,
-    margin: int,
-) -> tuple[int, int]:
-    max_x = max(target_width - overlay_width - margin, margin)
-    max_y = max(target_height - overlay_height - margin, margin)
-    center_x = max(int((target_width - overlay_width) / 2), 0)
-    center_y = max(int((target_height - overlay_height) / 2), 0)
+def _pip_overlay_position_expr(position: str, margin: int) -> tuple[str, str]:
+    margin_expr = str(max(margin, 0))
     if position == "top_left":
-        return margin, margin
+        return margin_expr, margin_expr
     if position == "top_right":
-        return max_x, margin
+        return f"W-w-{margin_expr}", margin_expr
     if position == "bottom_left":
-        return margin, max_y
+        return margin_expr, f"H-h-{margin_expr}"
     if position == "top":
-        return center_x, margin
+        return "(W-w)/2", margin_expr
     if position == "center":
-        return center_x, center_y
+        return "(W-w)/2", "(H-h)/2"
     if position == "bottom":
-        return center_x, max_y
-    return max_x, max_y
+        return "(W-w)/2", f"H-h-{margin_expr}"
+    return f"W-w-{margin_expr}", f"H-h-{margin_expr}"
 
 
 def apply_visual_overlays(
@@ -676,14 +666,9 @@ def apply_visual_overlays(
             input_index = asset_indexes[str(active_overlay["asset_path"])]
             if str(active_overlay.get("compose_mode")) == "picture_in_picture":
                 pip_width = max(160, min(int(round(width * float(active_overlay.get("scale", 0.42)))), max(width - 64, 160)))
-                pip_height = max(120, min(int(round(height * float(active_overlay.get("scale", 0.42)))), max(height - 64, 120)))
                 margin = int(active_overlay.get("margin", 24))
-                x_pos, y_pos = _pip_overlay_position(
+                x_pos, y_pos = _pip_overlay_position_expr(
                     str(active_overlay.get("position") or "bottom_right"),
-                    width,
-                    height,
-                    pip_width,
-                    pip_height,
                     margin,
                 )
                 filter_parts.append(
@@ -696,8 +681,8 @@ def apply_visual_overlays(
                 filter_parts.append(
                     (
                         f"[{input_index}:v]trim=0:{segment_duration:.3f},setpts=PTS-STARTPTS,"
-                        f"fps={math.ceil(fps)},scale={pip_width}:{pip_height}:force_original_aspect_ratio=decrease,"
-                        f"pad={pip_width}:{pip_height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[ov{index}]"
+                        f"fps={math.ceil(fps)},scale={pip_width}:-2:force_original_aspect_ratio=decrease,"
+                        f"setsar=1[ov{index}]"
                     )
                 )
                 filter_parts.append(f"[base{index}][ov{index}]overlay={x_pos}:{y_pos}:shortest=1[v{index}]")

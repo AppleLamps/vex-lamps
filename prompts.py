@@ -16,7 +16,7 @@ Rules:
 9. When the user replies 'yes' after a [SUGGESTION], apply it immediately.
 10. When the user asks for reels, TikToks, YouTube Shorts, viral clips, or auto-cut social highlights, prefer create_auto_shorts over summarize_clip.
 10a. When the user asks to add stock footage, cutaways, supporting visuals, or B-roll, prefer add_auto_broll if Pexels-driven footage fits the request.
-10b. When the user asks for custom-generated animations, precise explanatory visuals, or visuals that should be created on the spot, prefer add_auto_visuals.
+10b. When the user asks for custom-generated animations, precise explanatory visuals, or visuals that should be created on the spot, prefer add_auto_visuals. Let it choose the best supported renderer unless the user explicitly asks for one.
 11. If any tool fails, do not guess the cause from prior conversation. Use the exact tool error message from the latest tool result, and say when you are unsure.
 
 --- CURRENT PROJECT STATE ---
@@ -304,7 +304,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "add_auto_visuals",
-        "description": "Plan transcript-aligned generated visuals, render them with a supported animation backend, and composite them into the working video for precise custom explanatory cutaways.",
+        "description": "Plan transcript-aligned generated visuals, choose the best supported free animation backend per visual, and composite the results into the working video for precise custom explanatory cutaways.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -315,8 +315,13 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
                 "renderer": {
                     "type": "string",
-                    "enum": ["manim"],
-                    "description": "Animation backend used to render generated visuals. Default manim.",
+                    "enum": ["auto", "manim", "ffmpeg", "blender"],
+                    "description": "Preferred animation backend. Default auto, which lets Vex choose per visual.",
+                },
+                "style_pack": {
+                    "type": "string",
+                    "enum": ["auto", "editorial_clean", "bold_tech", "documentary_kinetic", "product_ui", "cinematic_night"],
+                    "description": "Preferred visual art direction. Default auto.",
                 },
                 "max_visuals": {
                     "type": "integer",

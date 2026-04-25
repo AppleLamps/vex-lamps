@@ -6,11 +6,13 @@ from pathlib import Path
 import config
 from broll_intelligence import ensure_writable_dir, safe_stem, writable_dir_candidates
 from engine import VideoEngineError, apply_visual_overlays, probe_video
-from renderers import VisualRendererError, get_renderer
+from renderers import VisualRendererError, renderer_capabilities, resolve_renderer
 from state import ProjectState, utc_now_iso
 from tools.transcript import execute as transcribe
 from tools.transcript_utils import load_transcript_bundle
 from visual_intelligence import (
+    STYLE_PACKS,
+    THEME_BY_VISUAL_TYPE,
     analyze_visual_plan_with_llm,
     build_visual_context_cards,
     detect_scene_cuts,
@@ -59,11 +61,55 @@ def _delegate_stock_fallback(params: dict, state: ProjectState, reason: str) -> 
     }
 
 
+def _apply_style_override(spec: dict[str, object], style_pack: str) -> None:
+    normalized = (style_pack or "auto").strip().lower()
+    if normalized in {"", "auto"} or normalized not in STYLE_PACKS:
+        return
+    visual_type_hint = str(spec.get("visual_type_hint") or "")
+    theme = dict(STYLE_PACKS[normalized])
+    theme.update(THEME_BY_VISUAL_TYPE.get(visual_type_hint, {}))
+    spec["style_pack"] = normalized
+    spec["theme"] = theme
+
+
+def _render_generated_visual(
+    spec: dict[str, object],
+    *,
+    preferred_renderer: str,
+    render_root: Path,
+    width: int,
+    height: int,
+    fps: float,
+) -> tuple[object, str]:
+    failures: list[str] = []
+    attempted: set[str] = set()
+    preference_order = [preferred_renderer, str(spec.get("renderer_hint") or "auto"), "auto"]
+    for candidate_preference in preference_order:
+        while True:
+            try:
+                renderer, reason = resolve_renderer(spec, preferred=candidate_preference, exclude=attempted)
+            except VisualRendererError as exc:
+                failures.append(str(exc))
+                break
+            attempted.add(renderer.name)
+            try:
+                asset = renderer.render(spec, render_root=render_root, width=width, height=height, fps=fps)
+                return asset, reason
+            except VisualRendererError as exc:
+                failures.append(f"{renderer.name}: {exc}")
+                if len(attempted) >= 3:
+                    break
+        if len(attempted) >= 3:
+            break
+    raise VisualRendererError("; ".join(failures) or "No renderer could produce the generated visual.")
+
+
 def execute(params: dict, state: ProjectState) -> dict:
     mode = str(params.get("mode") or "generated_only").strip().lower()
     if mode not in {"generated_only", "hybrid", "stock_only"}:
         mode = "generated_only"
-    renderer_name = str(params.get("renderer") or "manim").strip().lower()
+    renderer_name = str(params.get("renderer") or "auto").strip().lower()
+    style_pack = str(params.get("style_pack") or "auto").strip().lower()
     max_visuals = max(1, min(int(params.get("max_visuals", 4) or 4), 6))
     min_visual_sec = max(1.0, min(float(params.get("min_visual_sec", 1.4) or 1.4), 6.0))
     max_visual_sec = max(min_visual_sec, min(float(params.get("max_visual_sec", 3.6) or 3.6), 8.0))
@@ -82,12 +128,20 @@ def execute(params: dict, state: ProjectState) -> dict:
             raise RuntimeError("The current working video does not have valid timing or resolution metadata.")
 
         transcript_segments = list(transcript_bundle.get("segments") or [])
+        transcript_words = list(transcript_bundle.get("words") or [])
         sentence_segments = list(transcript_bundle.get("sentences") or [])
-        cards = build_visual_context_cards(sentence_segments, transcript_segments, clip_duration)
+        scene_cuts = detect_scene_cuts(state.working_file)
+        cards = build_visual_context_cards(
+            sentence_segments,
+            transcript_segments,
+            clip_duration,
+            words=transcript_words,
+            scene_cuts=scene_cuts,
+        )
         if not cards:
             raise RuntimeError("No transcript-aligned visual cards were available for planning.")
-        scene_cuts = detect_scene_cuts(state.working_file)
         provider_name, model_name = _provider_and_model(state)
+        capabilities = renderer_capabilities()
         plan = analyze_visual_plan_with_llm(
             provider_name=provider_name,
             model_name=model_name,
@@ -97,8 +151,8 @@ def execute(params: dict, state: ProjectState) -> dict:
             min_visual_sec=min_visual_sec,
             max_visual_sec=max_visual_sec,
             scene_cuts=scene_cuts,
+            available_renderers=capabilities,
         )
-        renderer = get_renderer(renderer_name)
         bundle_root = ensure_writable_dir(
             writable_dir_candidates(state.working_dir, state.output_dir, state.project_id, "auto_visual_bundles")
         )
@@ -111,8 +165,16 @@ def execute(params: dict, state: ProjectState) -> dict:
         applied_overlays: list[dict] = []
         render_failures: list[str] = []
         for spec in plan:
+            _apply_style_override(spec, style_pack)
             try:
-                asset = renderer.render(spec, render_root=render_root, width=width, height=height, fps=fps)
+                asset, selection_reason = _render_generated_visual(
+                    spec,
+                    preferred_renderer=renderer_name,
+                    render_root=render_root,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                )
             except VisualRendererError as exc:
                 render_failures.append(str(exc))
                 continue
@@ -141,10 +203,16 @@ def execute(params: dict, state: ProjectState) -> dict:
                     "context_text": spec["context_text"],
                     "keywords": spec["keywords"],
                     "visual_type_hint": spec["visual_type_hint"],
+                    "style_pack": spec.get("style_pack"),
                     "theme": spec["theme"],
                     "confidence": spec["confidence"],
                     "rationale": spec["rationale"],
                     "renderer": asset.renderer,
+                    "renderer_hint": spec.get("renderer_hint"),
+                    "renderer_selection_reason": selection_reason,
+                    "motion_preset": spec.get("motion_preset"),
+                    "importance": spec.get("importance"),
+                    "evidence": spec.get("evidence"),
                     "renderer_job_dir": asset.job_dir,
                     "renderer_script_path": asset.script_path,
                     "rendered_width": asset.width,
@@ -180,7 +248,9 @@ def execute(params: dict, state: ProjectState) -> dict:
             "source_video": state.source_files[0] if state.source_files else state.working_file,
             "working_file": state.working_file,
             "renderer": renderer_name,
+            "style_pack": style_pack,
             "mode": mode,
+            "renderer_capabilities": capabilities,
             "transcript_paths": transcript_bundle.get("paths", {}),
             "scene_cuts": scene_cuts,
             "plan": plan,
@@ -189,11 +259,19 @@ def execute(params: dict, state: ProjectState) -> dict:
         }
         manifest_path = bundle_dir / "manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+        renderer_counts: dict[str, int] = {}
+        for overlay in applied_overlays:
+            renderer_counts[str(overlay.get("renderer") or "unknown")] = renderer_counts.get(
+                str(overlay.get("renderer") or "unknown"),
+                0,
+            ) + 1
+        renderer_summary = ", ".join(f"{name} x{count}" for name, count in sorted(renderer_counts.items()))
 
         notes_lines = [
             "# Auto Visuals Notes",
             "",
-            f"Renderer: {renderer_name}",
+            f"Renderer preference: {renderer_name}",
+            f"Style pack: {style_pack}",
             f"Mode: {mode}",
             "",
         ]
@@ -203,6 +281,7 @@ def execute(params: dict, state: ProjectState) -> dict:
                     f"## {overlay['start']:.2f}s-{overlay['end']:.2f}s",
                     f"Template: {overlay['template']}",
                     f"Headline: {overlay['headline']}",
+                    f"Renderer: {overlay['renderer']}",
                     f"Composition: {overlay['compose_mode']}",
                     f"Why: {overlay['rationale']}",
                     "",
@@ -216,6 +295,8 @@ def execute(params: dict, state: ProjectState) -> dict:
             "bundle_dir": str(bundle_dir),
             "count": len(applied_overlays),
             "renderer": renderer_name,
+            "style_pack": style_pack,
+            "renderer_counts": renderer_counts,
         }
         history = list(state.artifacts.get("auto_visuals_history") or [])
         history.append(state.artifacts["latest_auto_visuals"])
@@ -226,6 +307,7 @@ def execute(params: dict, state: ProjectState) -> dict:
                 "params": {
                     "mode": mode,
                     "renderer": renderer_name,
+                    "style_pack": style_pack,
                     "max_visuals": max_visuals,
                     "min_visual_sec": min_visual_sec,
                     "max_visual_sec": max_visual_sec,
@@ -234,12 +316,15 @@ def execute(params: dict, state: ProjectState) -> dict:
                 },
                 "timestamp": utc_now_iso(),
                 "result_file": output_path,
-                "description": f"Added {len(applied_overlays)} transcript-aligned generated visuals with {renderer_name}",
+                "description": f"Added {len(applied_overlays)} transcript-aligned generated visuals ({renderer_summary})",
             }
         )
         return {
             "success": True,
-            "message": f"Added {len(applied_overlays)} transcript-aligned generated visuals with {renderer_name}. Manifest: {manifest_path}",
+            "message": (
+                f"Added {len(applied_overlays)} transcript-aligned generated visuals using {renderer_summary} "
+                f"(preference: {renderer_name}). Manifest: {manifest_path}"
+            ),
             "suggestion": None,
             "updated_state": state,
             "tool_name": "add_auto_visuals",

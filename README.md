@@ -92,7 +92,8 @@ During each turn, Vex also shows a live agent trace panel so you can see what it
 - Python 3.11+
 - FFmpeg installed and available on `PATH`
 - `yt-dlp` available through the Python environment for YouTube downloads
-- `manim` is recommended if you want generated animation inserts via `add_auto_visuals`
+- `manim` is recommended if you want the richest diagram-style generated visuals via `add_auto_visuals`
+- `blender` is optional if you want cinematic generated replacement shots; set `BLENDER_PATH` if it is not already on `PATH`
 
 FFmpeg install:
 
@@ -171,6 +172,7 @@ ANTHROPIC_API_KEY=your_key_here
 - `PEXELS_API_KEY`
 - `AGENT_PROJECTS_DIR`
 - `FFMPEG_PATH`
+- `BLENDER_PATH`
 - `WHISPER_MODEL`
 
 ## Quick Start
@@ -259,7 +261,14 @@ Vex > add 4 stock cutaways that match the narration
 ```text
 Vex > add precise generated visuals wherever the explanation needs them
 Vex > create custom animations for the key claims and process steps in this video
+Vex > use clean product-style generated visuals for the UI explanations
 ```
+
+`add_auto_visuals` now uses a multi-pass visual planner, style packs, and renderer auto-selection. Today it can choose between:
+
+- `manim` for diagrams, flows, comparisons, and data-heavy explainer visuals
+- `ffmpeg` for fast, clean editorial cards, quote shots, and picture-in-picture support graphics
+- `blender` for cinematic replacement visuals when Blender is installed
 
 ### Export for social
 
@@ -288,7 +297,7 @@ These are the editing tools Vex exposes to the agent loop.
 | `summarize_clip` | Uses transcript-aware LLM selection to build a shorter highlight cut |
 | `create_auto_shorts` | Builds multiple ranked vertical shorts with transcript analysis, captions, metadata, and a manifest bundle |
 | `add_auto_broll` | Plans subtitle-aligned B-roll beats, reranks matching Pexels stock clips against transcript context, and splices them into the current working video |
-| `add_auto_visuals` | Plans transcript-aligned generated visuals, renders them with Manim, and composites them into the working video |
+| `add_auto_visuals` | Plans transcript-aligned generated visuals, scores the best beats, chooses the best supported free renderer per visual, and composites the results into the working video |
 | `export_video` | Exports the working video with a named preset |
 | `undo` | Rebuilds the project without the last operation |
 | `redo` | Reapplies the most recently undone operation |
@@ -324,7 +333,7 @@ vex auto-broll --project <project-id> --max-overlays 5
 Plan and apply generated supporting visuals to an existing project.
 
 ```bash
-vex auto-visuals --project <project-id> --max-visuals 4 --renderer manim
+vex auto-visuals --project <project-id> --max-visuals 4 --renderer auto --style-pack editorial_clean
 ```
 
 ### `vex youtube-shorts`

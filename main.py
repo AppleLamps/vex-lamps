@@ -432,6 +432,7 @@ def direct_auto_visuals(
     state: ProjectState,
     mode: str,
     renderer: str,
+    style_pack: str,
     max_visuals: int,
     min_visual_sec: float,
     max_visual_sec: float,
@@ -448,6 +449,7 @@ def direct_auto_visuals(
             {
                 "mode": mode,
                 "renderer": renderer,
+                "style_pack": style_pack,
                 "max_visuals": max_visuals,
                 "min_visual_sec": min_visual_sec,
                 "max_visual_sec": max_visual_sec,
@@ -682,7 +684,11 @@ def auto_broll(
 def auto_visuals(
     project: str = typer.Option(..., help="Project id."),
     mode: str = typer.Option("generated_only", help="generated_only, hybrid, or stock_only."),
-    renderer: str = typer.Option("manim", help="Renderer backend. Currently: manim."),
+    renderer: str = typer.Option("auto", help="Renderer backend preference: auto, manim, ffmpeg, or blender."),
+    style_pack: str = typer.Option(
+        "auto",
+        help="Preferred style pack: auto, editorial_clean, bold_tech, documentary_kinetic, product_ui, or cinematic_night.",
+    ),
     max_visuals: int = typer.Option(4, help="Maximum number of generated visuals to add."),
     min_visual_sec: float = typer.Option(1.4, help="Minimum duration of each generated visual."),
     max_visual_sec: float = typer.Option(3.6, help="Maximum duration of each generated visual."),
@@ -690,13 +696,18 @@ def auto_visuals(
     initialize_runtime()
     if mode not in {"generated_only", "hybrid", "stock_only"}:
         raise typer.BadParameter("mode must be one of: generated_only, hybrid, stock_only")
-    if renderer not in {"manim"}:
-        raise typer.BadParameter("renderer must be: manim")
+    if renderer not in {"auto", "manim", "ffmpeg", "blender"}:
+        raise typer.BadParameter("renderer must be one of: auto, manim, ffmpeg, blender")
+    if style_pack not in {"auto", "editorial_clean", "bold_tech", "documentary_kinetic", "product_ui", "cinematic_night"}:
+        raise typer.BadParameter(
+            "style_pack must be one of: auto, editorial_clean, bold_tech, documentary_kinetic, product_ui, cinematic_night"
+        )
     state = ProjectState.load(project)
     direct_auto_visuals(
         state,
         mode=mode,
         renderer=renderer,
+        style_pack=style_pack,
         max_visuals=max_visuals,
         min_visual_sec=min_visual_sec,
         max_visual_sec=max_visual_sec,

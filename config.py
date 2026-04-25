@@ -16,6 +16,7 @@ CLAUDE_MODEL = "claude-sonnet-4-5"
 PEXELS_API_KEY = None
 AGENT_PROJECTS_DIR = os.path.expanduser("~/.video-agent/projects/")
 FFMPEG_PATH = "ffmpeg"
+BLENDER_PATH = "blender"
 WHISPER_MODEL = "base"
 VERSION = "1.0.0"
 
@@ -67,6 +68,7 @@ def reload_settings() -> None:
     global PEXELS_API_KEY
     global AGENT_PROJECTS_DIR
     global FFMPEG_PATH
+    global BLENDER_PATH
     global WHISPER_MODEL
 
     PROVIDER = os.getenv("PROVIDER", "gemini").strip().lower()
@@ -79,6 +81,7 @@ def reload_settings() -> None:
         os.getenv("AGENT_PROJECTS_DIR", "~/.video-agent/projects/")
     )
     FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
+    BLENDER_PATH = os.getenv("BLENDER_PATH", "blender")
     WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 
 
