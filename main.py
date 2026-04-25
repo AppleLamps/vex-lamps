@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
+from agent_trace import TraceEvent, render_trace_table
 from rich import box
-from rich.console import Console
+from rich.console import Console, Group
 from rich.live import Live
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
@@ -289,6 +290,52 @@ def render_projects() -> None:
     console.print(table)
 
 
+def render_trace_history(state: ProjectState) -> None:
+    artifact = (state.artifacts or {}).get("latest_agent_trace")
+    if not artifact:
+        console.print("No agent trace recorded yet.")
+        return
+    events = [TraceEvent.from_dict(item) for item in artifact.get("events", [])]
+    meta = Table.grid(padding=(0, 2))
+    meta.add_row("Instruction:", str(artifact.get("instruction") or "unknown"))
+    meta.add_row("Provider:", f"{artifact.get('provider', 'unknown')} / {artifact.get('model', 'unknown')}")
+    meta.add_row("Success:", "yes" if artifact.get("success") else "no")
+    if artifact.get("tools_called"):
+        meta.add_row("Tools:", ", ".join(str(name) for name in artifact["tools_called"]))
+    body = Group(meta, render_trace_table(events, max_items=16))
+    console.print(Panel(body, title="Latest Agent Trace", border_style="magenta"))
+
+
+def render_live_agent_view(output: Text, trace_events: list[TraceEvent]):
+    output_panel = Panel(output or Text(" "), title="Vex", border_style="cyan")
+    trace_panel = Panel(render_trace_table(trace_events, max_items=8), title="Agent Trace", border_style="magenta")
+    return Group(output_panel, trace_panel)
+
+
+def run_agent_with_live_trace(agent: VideoAgent, command: str):
+    output = Text()
+    trace_events: list[TraceEvent] = []
+
+    with Live(render_live_agent_view(output, trace_events), console=console, refresh_per_second=8) as live:
+        def refresh_live() -> None:
+            live.update(render_live_agent_view(output, trace_events))
+
+        def stream_callback(chunk: str) -> None:
+            output.append(chunk)
+            refresh_live()
+
+        def trace_callback(event: TraceEvent) -> None:
+            trace_events.append(event)
+            refresh_live()
+
+        response = agent.run(
+            command,
+            stream_callback=stream_callback,
+            trace_callback=trace_callback,
+        )
+    return response, trace_events
+
+
 def direct_export(state: ProjectState, preset_name: str, output: str | None = None) -> None:
     presets = load_presets()
     if preset_name not in presets:
@@ -436,7 +483,7 @@ def run_repl(state: ProjectState | None, provider) -> None:
             return
         if command == "/help":
             console.print(
-                "/status, /timeline, /undo, /redo, /export <preset>, /provider, /projects, /help, /quit"
+                "/status, /timeline, /trace, /undo, /redo, /export <preset>, /provider, /projects, /help, /quit"
             )
             continue
         if command == "/status":
@@ -450,6 +497,12 @@ def run_repl(state: ProjectState | None, provider) -> None:
                 console.print("No video loaded. Drop a file path or YouTube link in your message to get started.")
             else:
                 render_timeline(state)
+            continue
+        if command == "/trace":
+            if state is None:
+                console.print("No video loaded. Drop a file path or YouTube link in your message to get started.")
+            else:
+                render_trace_history(state)
             continue
         if command == "/provider":
             if state is None:
@@ -513,36 +566,8 @@ def run_repl(state: ProjectState | None, provider) -> None:
             console.print("No video loaded. Drop a file path or YouTube link in your message to get started.")
             continue
 
-        output = Text()
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("{task.description}"),
-            console=console,
-            transient=True,
-        )
-        tasks: dict[str, int] = {}
-
-        def stream_callback(chunk: str) -> None:
-            output.append(chunk)
-            live.update(Panel(output or Text(" "), title="Vex", border_style="cyan"))
-
-        def tool_callback(event: str, name: str, ok: bool) -> None:
-            if event == "start":
-                tasks[name] = progress.add_task(f"{name}...", total=None)
-            else:
-                task_id = tasks.get(name)
-                if task_id is not None:
-                    progress.update(task_id, description=f"{name} {'done' if ok else 'failed'}")
-                    progress.remove_task(task_id)
-
         try:
-            with Live(Panel(Text(" "), title="Vex", border_style="cyan"), console=console, refresh_per_second=8) as live:
-                with progress:
-                    response = agent.run(
-                        command,
-                        stream_callback=stream_callback,
-                        tool_callback=tool_callback,
-                    )
+            response, _trace_events = run_agent_with_live_trace(agent, command)
         except AgentLoopError as exc:
             console.print(f"Agent error: {exc}", style="red")
             continue
@@ -584,7 +609,7 @@ def run(
     state = ProjectState.load(project)
     agent = VideoAgent(state, provider)
     try:
-        response = agent.run(instruction)
+        response, _trace_events = run_agent_with_live_trace(agent, instruction)
     except Exception:
         console.print_exception()
         raise typer.Exit(code=1)

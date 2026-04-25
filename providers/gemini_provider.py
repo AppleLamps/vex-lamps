@@ -149,13 +149,24 @@ class GeminiProvider(BaseLLMProvider):
         tools: list[dict],
         system_prompt: str,
         stream_callback=None,
+        event_callback=None,
     ) -> LLMResponse:
         native_messages = self._neutral_to_native(messages)
         config_obj = self._build_config(tools, system_prompt)
+        if event_callback is not None:
+            event_callback(
+                {
+                    "kind": "provider",
+                    "title": "Sending request to Gemini",
+                    "detail": f"Model: {self._model_name}",
+                    "status": "running",
+                }
+            )
         if stream_callback is not None:
             text_chunks: list[str] = []
             raw_response = []
             all_tool_calls: list[ToolCall] = []
+            announced_text = False
             for chunk in self._client.models.generate_content_stream(
                 model=self._model_name,
                 contents=native_messages,
@@ -163,9 +174,38 @@ class GeminiProvider(BaseLLMProvider):
             ):
                 raw_response.append(chunk)
                 if getattr(chunk, "text", None):
+                    if event_callback is not None and not announced_text:
+                        event_callback(
+                            {
+                                "kind": "provider",
+                                "title": "Streaming assistant response",
+                                "detail": "Receiving model output.",
+                                "status": "running",
+                            }
+                        )
+                        announced_text = True
                     text_chunks.append(chunk.text)
                     stream_callback(chunk.text)
                 all_tool_calls.extend(self._extract_tool_calls(chunk))
+            if event_callback is not None:
+                if all_tool_calls:
+                    event_callback(
+                        {
+                            "kind": "provider",
+                            "title": "Model requested tools",
+                            "detail": ", ".join(call.name for call in all_tool_calls[:4]),
+                            "status": "info",
+                        }
+                    )
+                else:
+                    event_callback(
+                        {
+                            "kind": "provider",
+                            "title": "Model finished response",
+                            "detail": "No tool calls were returned.",
+                            "status": "success",
+                        }
+                    )
             return LLMResponse(text="".join(text_chunks), tool_calls=all_tool_calls, raw=raw_response)
 
         response = self._client.models.generate_content(
@@ -175,6 +215,25 @@ class GeminiProvider(BaseLLMProvider):
         )
         text = getattr(response, "text", "") or ""
         tool_calls = self._extract_tool_calls(response)
+        if event_callback is not None:
+            if tool_calls:
+                event_callback(
+                    {
+                        "kind": "provider",
+                        "title": "Model requested tools",
+                        "detail": ", ".join(call.name for call in tool_calls[:4]),
+                        "status": "info",
+                    }
+                )
+            else:
+                event_callback(
+                    {
+                        "kind": "provider",
+                        "title": "Model returned text response",
+                        "detail": "Ready to finalize the turn.",
+                        "status": "success",
+                    }
+                )
         return LLMResponse(text=text, tool_calls=tool_calls, raw=response)
 
     def format_tool_result(

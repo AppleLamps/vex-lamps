@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from agent_trace import TraceEvent, TraceRecorder, truncate_trace_text
 from prompts import TOOL_SCHEMAS, build_system_prompt
 from providers.base import BaseLLMProvider
 from state import ProjectState
@@ -51,26 +52,122 @@ class VideoAgent:
         )
         return f"{text.strip()}\n\n{failure_block}".strip()
 
+    def _summarize_tool_params(self, params: dict) -> str:
+        items: list[str] = []
+        for key, value in params.items():
+            rendered = value
+            if isinstance(value, list):
+                rendered = ", ".join(str(item) for item in value[:3])
+                if len(value) > 3:
+                    rendered = f"{rendered}, ..."
+            items.append(f"{key}={rendered}")
+        return truncate_trace_text(", ".join(items), 180) if items else "No parameters."
+
+    def _summarize_tool_result(self, result: dict) -> str:
+        message = truncate_trace_text(str(result.get("message", "")), 180)
+        if message:
+            return message
+        return "Tool finished without a message."
+
+    def _emit_trace(
+        self,
+        recorder: TraceRecorder,
+        trace_callback: Callable[[TraceEvent], None] | None,
+        *,
+        kind: str,
+        title: str,
+        detail: str = "",
+        status: str = "info",
+        metadata: dict | None = None,
+    ) -> TraceEvent:
+        event = recorder.emit(
+            kind=kind,
+            title=title,
+            detail=detail,
+            status=status,
+            metadata=metadata,
+        )
+        if trace_callback is not None:
+            trace_callback(event)
+        return event
+
+    def _save_trace_artifact(
+        self,
+        recorder: TraceRecorder,
+        *,
+        success: bool,
+        tools_called: list[str],
+        final_message: str,
+    ) -> None:
+        artifact = recorder.to_artifact(
+            success=success,
+            tools_called=tools_called,
+            final_message=final_message,
+        )
+        self.state.artifacts["latest_agent_trace"] = artifact
+        history = list(self.state.artifacts.get("agent_trace_history") or [])
+        history.append(artifact)
+        self.state.artifacts["agent_trace_history"] = history[-20:]
+
     def run(
         self,
         user_message: str,
         stream_callback: Callable[[str], None] | None = None,
         tool_callback: Callable[[str, str, bool], None] | None = None,
+        trace_callback: Callable[[TraceEvent], None] | None = None,
     ) -> AgentResponse:
         self.conversation.append({"role": "user", "content": user_message})
         tools_called: list[str] = []
         tool_failures: list[dict[str, str]] = []
         final_text = ""
         success = True
-        for _ in range(10):
+        recorder = TraceRecorder(
+            instruction=user_message,
+            provider=self.state.provider or self.provider.__class__.__name__,
+            model=self.provider.model_name,
+        )
+        self._emit_trace(
+            recorder,
+            trace_callback,
+            kind="turn",
+            title="Received instruction",
+            detail=truncate_trace_text(user_message, 180),
+            status="info",
+        )
+        for iteration in range(10):
             system_prompt = build_system_prompt(self.state)
+            self._emit_trace(
+                recorder,
+                trace_callback,
+                kind="agent",
+                title=f"Planning pass {iteration + 1}",
+                detail="Reviewing project state and deciding the next step.",
+                status="running",
+            )
             response = self.provider.chat(
                 messages=self.conversation,
                 tools=TOOL_SCHEMAS,
                 system_prompt=system_prompt,
                 stream_callback=stream_callback,
+                event_callback=lambda payload: self._emit_trace(
+                    recorder,
+                    trace_callback,
+                    kind=str(payload.get("kind", "provider")),
+                    title=str(payload.get("title", "Provider update")),
+                    detail=str(payload.get("detail", "")),
+                    status=str(payload.get("status", "info")),
+                    metadata=dict(payload.get("metadata") or {}),
+                ),
             )
             if response.tool_calls:
+                self._emit_trace(
+                    recorder,
+                    trace_callback,
+                    kind="agent",
+                    title=f"Model proposed {len(response.tool_calls)} tool call(s)",
+                    detail=", ".join(call.name for call in response.tool_calls[:4]),
+                    status="info",
+                )
                 self.conversation.append(
                     {
                         "role": "assistant",
@@ -82,6 +179,14 @@ class VideoAgent:
                 )
                 for call in response.tool_calls:
                     tools_called.append(call.name)
+                    self._emit_trace(
+                        recorder,
+                        trace_callback,
+                        kind="tool",
+                        title=f"Running {call.name}",
+                        detail=self._summarize_tool_params(call.params),
+                        status="running",
+                    )
                     if tool_callback:
                         tool_callback("start", call.name, True)
                     executor = TOOL_EXECUTORS.get(call.name)
@@ -115,6 +220,14 @@ class VideoAgent:
                                 "message": str(result.get("message", "Tool failed without an error message.")),
                             }
                         )
+                    self._emit_trace(
+                        recorder,
+                        trace_callback,
+                        kind="tool",
+                        title=f"{call.name} {'completed' if bool(result.get('success')) else 'failed'}",
+                        detail=self._summarize_tool_result(result),
+                        status="success" if bool(result.get("success")) else "error",
+                    )
                     if tool_callback:
                         tool_callback("finish", call.name, bool(result.get("success")))
                     self.conversation.append(
@@ -126,9 +239,23 @@ class VideoAgent:
                     )
                 continue
             final_text = self._inject_tool_failures(response.text.strip(), tool_failures)
+            self._emit_trace(
+                recorder,
+                trace_callback,
+                kind="agent",
+                title="Final response ready",
+                detail=truncate_trace_text(final_text.splitlines()[0] if final_text else "Turn complete.", 180),
+                status="success" if success else "error",
+            )
             suggestions = self._extract_suggestions(final_text)
             self.conversation.append({"role": "assistant", "content": final_text})
             self.state.session_log = self.conversation
+            self._save_trace_artifact(
+                recorder,
+                success=success,
+                tools_called=tools_called,
+                final_message=final_text,
+            )
             self.state.save()
             return AgentResponse(
                 message=final_text,
@@ -136,4 +263,19 @@ class VideoAgent:
                 suggestions=suggestions,
                 success=success,
             )
+        self._emit_trace(
+            recorder,
+            trace_callback,
+            kind="agent",
+            title="Agent loop limit reached",
+            detail="The tool loop hit its maximum number of planning passes.",
+            status="error",
+        )
+        self._save_trace_artifact(
+            recorder,
+            success=False,
+            tools_called=tools_called,
+            final_message=final_text,
+        )
+        self.state.save()
         raise AgentLoopError("Maximum agent loop iterations (10) exceeded.")

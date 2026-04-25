@@ -14,6 +14,7 @@ It is built for people who want the speed of CLI workflows without giving up con
 - Stateful projects: resume later with timeline history intact
 - Real editing tools: trims, overlays, audio edits, subtitle burn-in, silence cleanup, exports, and more
 - Multi-provider ready: Gemini by default, Claude when you explicitly choose it
+- Live agent traces: watch the agent plan, call tools, and finish each turn step by step
 - Terminal-native: fast, scriptable, and easy to integrate into your workflow
 
 ## What Vex Can Do
@@ -81,6 +82,8 @@ Vex > /quit
 You do not need to type subcommands inside the session.
 
 If no project is loaded, include a video path in your first message and Vex handles the rest.
+
+During each turn, Vex also shows a live agent trace panel so you can see what it is doing.
 
 ## Installation
 
@@ -289,6 +292,8 @@ These are the editing tools Vex exposes to the agent loop.
 | `export_video` | Exports the working video with a named preset |
 | `undo` | Rebuilds the project without the last operation |
 | `redo` | Reapplies the most recently undone operation |
+
+Inside the REPL, you can also use `/trace` to inspect the latest recorded agent trace for the current project.
 
 ## CLI Commands
 

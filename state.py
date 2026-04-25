@@ -167,6 +167,12 @@ class ProjectState:
                 "Latest auto visuals: "
                 f"{latest_auto_visuals.get('count', 0)} inserts @ {latest_auto_visuals.get('manifest_path', 'unknown')}"
             )
+        latest_agent_trace = (self.artifacts or {}).get("latest_agent_trace")
+        if latest_agent_trace:
+            lines.append(
+                "Latest agent trace: "
+                f"{len(latest_agent_trace.get('events') or [])} steps @ {latest_agent_trace.get('created_at', 'unknown')}"
+            )
         if self.timeline:
             lines.append("Timeline:")
             for index, op in enumerate(self.timeline, start=1):

@@ -27,6 +27,7 @@ class BaseLLMProvider(ABC):
         tools: list[dict],
         system_prompt: str,
         stream_callback=None,
+        event_callback=None,
     ) -> LLMResponse:
         raise NotImplementedError
 

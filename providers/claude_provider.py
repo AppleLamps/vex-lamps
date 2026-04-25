@@ -72,12 +72,23 @@ class ClaudeProvider(BaseLLMProvider):
         tools: list[dict],
         system_prompt: str,
         stream_callback=None,
+        event_callback=None,
     ) -> LLMResponse:
         native_messages = self._translate_messages(messages)
         translated_tools = self._translate_tools(tools)
         text_chunks: list[str] = []
         tool_calls: list[ToolCall] = []
+        if event_callback is not None:
+            event_callback(
+                {
+                    "kind": "provider",
+                    "title": "Sending request to Claude",
+                    "detail": f"Model: {self._model_name}",
+                    "status": "running",
+                }
+            )
         if stream_callback is not None:
+            announced_text = False
             with self.client.messages.stream(
                 model=self._model_name,
                 system=system_prompt,
@@ -87,12 +98,41 @@ class ClaudeProvider(BaseLLMProvider):
             ) as stream:
                 for event in stream:
                     if event.type == "content_block_delta" and getattr(event.delta, "text", None):
+                        if event_callback is not None and not announced_text:
+                            event_callback(
+                                {
+                                    "kind": "provider",
+                                    "title": "Streaming assistant response",
+                                    "detail": "Receiving model output.",
+                                    "status": "running",
+                                }
+                            )
+                            announced_text = True
                         text_chunks.append(event.delta.text)
                         stream_callback(event.delta.text)
                 final_message = stream.get_final_message()
             for block in final_message.content:
                 if block.type == "tool_use":
                     tool_calls.append(ToolCall(id=block.id, name=block.name, params=block.input))
+            if event_callback is not None:
+                if tool_calls:
+                    event_callback(
+                        {
+                            "kind": "provider",
+                            "title": "Model requested tools",
+                            "detail": ", ".join(call.name for call in tool_calls[:4]),
+                            "status": "info",
+                        }
+                    )
+                else:
+                    event_callback(
+                        {
+                            "kind": "provider",
+                            "title": "Model finished response",
+                            "detail": "No tool calls were returned.",
+                            "status": "success",
+                        }
+                    )
             return LLMResponse(text="".join(text_chunks), tool_calls=tool_calls, raw=final_message)
 
         response = self.client.messages.create(
@@ -107,6 +147,25 @@ class ClaudeProvider(BaseLLMProvider):
                 text_chunks.append(block.text)
             elif block.type == "tool_use":
                 tool_calls.append(ToolCall(id=block.id, name=block.name, params=block.input))
+        if event_callback is not None:
+            if tool_calls:
+                event_callback(
+                    {
+                        "kind": "provider",
+                        "title": "Model requested tools",
+                        "detail": ", ".join(call.name for call in tool_calls[:4]),
+                        "status": "info",
+                    }
+                )
+            else:
+                event_callback(
+                    {
+                        "kind": "provider",
+                        "title": "Model returned text response",
+                        "detail": "Ready to finalize the turn.",
+                        "status": "success",
+                    }
+                )
         return LLMResponse(text="".join(text_chunks), tool_calls=tool_calls, raw=response)
 
     def format_tool_result(
