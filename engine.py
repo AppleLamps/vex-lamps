@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import uuid
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import ffmpeg
 from moviepy.editor import ColorClip, CompositeVideoClip, TextClip, VideoFileClip
@@ -534,23 +534,13 @@ def _invert_time_ranges(duration: float, removal_ranges: list[tuple[float, float
     return [(start_sec, end_sec) for start_sec, end_sec in keep_ranges if end_sec - start_sec > 0.02]
 
 
-def apply_b_roll_overlays(
-    input_path: str,
-    working_dir: str,
-    overlays: list[dict[str, float | str]],
-) -> str:
-    if not overlays:
-        return input_path
-
-    clip_info = probe_video(input_path)
-    duration = max(float(clip_info["duration_sec"]), 0.0)
-    width = int(clip_info.get("width") or 0)
-    height = int(clip_info.get("height") or 0)
-    fps = float(clip_info.get("fps") or 30.0) or 30.0
-    if duration <= 0.0 or width <= 0 or height <= 0:
-        return input_path
-
-    normalized: list[dict[str, float | str]] = []
+def _normalize_visual_overlays(
+    overlays: list[dict[str, Any]],
+    duration: float,
+    width: int,
+    height: int,
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     for item in sorted(overlays, key=lambda candidate: float(candidate.get("start", 0.0))):
         asset_path = str(item.get("asset_path") or "").strip()
         if not asset_path or not Path(asset_path).is_file():
@@ -563,14 +553,74 @@ def apply_b_roll_overlays(
             continue
         if normalized and start_sec < float(normalized[-1]["end"]):
             continue
+        compose_mode = str(item.get("compose_mode") or item.get("composition_mode") or "replace").strip().lower()
+        if compose_mode in {"overlay", "pip", "picture-in-picture"}:
+            compose_mode = "picture_in_picture"
+        if compose_mode not in {"replace", "picture_in_picture"}:
+            compose_mode = "replace"
+        scale = max(0.22, min(float(item.get("scale", item.get("pip_scale", 0.42)) or 0.42), 0.85))
+        margin = int(max(16, min(float(item.get("margin", max(min(width, height) * 0.04, 24.0))), 160)))
+        position = str(item.get("position") or "bottom_right").strip().lower()
+        if position not in {"top_left", "top_right", "bottom_left", "bottom_right", "top", "bottom", "center"}:
+            position = "bottom_right"
         normalized.append(
             {
                 "start": round(start_sec, 3),
                 "end": round(end_sec, 3),
                 "asset_path": asset_path,
+                "compose_mode": compose_mode,
+                "scale": round(scale, 3),
+                "margin": margin,
+                "position": position,
             }
         )
+    return normalized
 
+
+def _pip_overlay_position(
+    position: str,
+    target_width: int,
+    target_height: int,
+    overlay_width: int,
+    overlay_height: int,
+    margin: int,
+) -> tuple[int, int]:
+    max_x = max(target_width - overlay_width - margin, margin)
+    max_y = max(target_height - overlay_height - margin, margin)
+    center_x = max(int((target_width - overlay_width) / 2), 0)
+    center_y = max(int((target_height - overlay_height) / 2), 0)
+    if position == "top_left":
+        return margin, margin
+    if position == "top_right":
+        return max_x, margin
+    if position == "bottom_left":
+        return margin, max_y
+    if position == "top":
+        return center_x, margin
+    if position == "center":
+        return center_x, center_y
+    if position == "bottom":
+        return center_x, max_y
+    return max_x, max_y
+
+
+def apply_visual_overlays(
+    input_path: str,
+    working_dir: str,
+    overlays: list[dict[str, Any]],
+) -> str:
+    if not overlays:
+        return input_path
+
+    clip_info = probe_video(input_path)
+    duration = max(float(clip_info["duration_sec"]), 0.0)
+    width = int(clip_info.get("width") or 0)
+    height = int(clip_info.get("height") or 0)
+    fps = float(clip_info.get("fps") or 30.0) or 30.0
+    if duration <= 0.0 or width <= 0 or height <= 0:
+        return input_path
+
+    normalized = _normalize_visual_overlays(overlays, duration, width, height)
     if not normalized:
         return input_path
 
@@ -624,13 +674,41 @@ def apply_b_roll_overlays(
             )
         else:
             input_index = asset_indexes[str(active_overlay["asset_path"])]
-            filter_parts.append(
-                (
-                    f"[{input_index}:v]trim=0:{segment_duration:.3f},setpts=PTS-STARTPTS,"
-                    f"fps={math.ceil(fps)},scale={width}:{height}:force_original_aspect_ratio=increase,"
-                    f"crop={width}:{height},setsar=1[v{index}]"
+            if str(active_overlay.get("compose_mode")) == "picture_in_picture":
+                pip_width = max(160, min(int(round(width * float(active_overlay.get("scale", 0.42)))), max(width - 64, 160)))
+                pip_height = max(120, min(int(round(height * float(active_overlay.get("scale", 0.42)))), max(height - 64, 120)))
+                margin = int(active_overlay.get("margin", 24))
+                x_pos, y_pos = _pip_overlay_position(
+                    str(active_overlay.get("position") or "bottom_right"),
+                    width,
+                    height,
+                    pip_width,
+                    pip_height,
+                    margin,
                 )
-            )
+                filter_parts.append(
+                    (
+                        f"[0:v]trim={start_sec:.3f}:{end_sec:.3f},setpts=PTS-STARTPTS,"
+                        f"fps={math.ceil(fps)},scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[base{index}]"
+                    )
+                )
+                filter_parts.append(
+                    (
+                        f"[{input_index}:v]trim=0:{segment_duration:.3f},setpts=PTS-STARTPTS,"
+                        f"fps={math.ceil(fps)},scale={pip_width}:{pip_height}:force_original_aspect_ratio=decrease,"
+                        f"pad={pip_width}:{pip_height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[ov{index}]"
+                    )
+                )
+                filter_parts.append(f"[base{index}][ov{index}]overlay={x_pos}:{y_pos}:shortest=1[v{index}]")
+            else:
+                filter_parts.append(
+                    (
+                        f"[{input_index}:v]trim=0:{segment_duration:.3f},setpts=PTS-STARTPTS,"
+                        f"fps={math.ceil(fps)},scale={width}:{height}:force_original_aspect_ratio=increase,"
+                        f"crop={width}:{height},setsar=1[v{index}]"
+                    )
+                )
         concat_inputs.append(f"[v{index}]")
 
     filter_parts.append(f"{''.join(concat_inputs)}concat=n={len(segments)}:v=1:a=0[v]")
@@ -656,8 +734,26 @@ def apply_b_roll_overlays(
             output_path,
         ]
     )
-    _run_command(command, "Failed to apply auto b-roll")
+    _run_command(command, "Failed to apply visual overlays")
     return output_path
+
+
+def apply_b_roll_overlays(
+    input_path: str,
+    working_dir: str,
+    overlays: list[dict[str, float | str]],
+) -> str:
+    return apply_visual_overlays(
+        input_path,
+        working_dir,
+        [
+            {
+                **item,
+                "compose_mode": "replace",
+            }
+            for item in overlays
+        ],
+    )
 
 
 def trim_silence(

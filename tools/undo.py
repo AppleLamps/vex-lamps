@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import uuid
 from pathlib import Path
 
 from engine import (
+    apply_visual_overlays,
     VideoEngineError,
     add_text,
     adjust_speed,
@@ -21,6 +23,24 @@ from engine import (
     trim_silence,
 )
 from state import ProjectState
+
+
+def _load_visual_overlays(params: dict) -> list[dict]:
+    overlays = list(params.get("overlays") or [])
+    if overlays:
+        return overlays
+    manifest_path = str(params.get("manifest_path") or "").strip()
+    if not manifest_path:
+        return []
+    manifest_file = Path(manifest_path)
+    if not manifest_file.is_file():
+        raise VideoEngineError(f"Cannot rebuild project because manifest is missing: {manifest_path}")
+    try:
+        payload = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise VideoEngineError(f"Cannot rebuild project because manifest is invalid JSON: {manifest_path}") from exc
+    loaded = payload.get("overlays") or []
+    return list(loaded) if isinstance(loaded, list) else []
 
 
 def _reapply_operations(state: ProjectState) -> None:
@@ -116,6 +136,13 @@ def _reapply_operations(state: ProjectState) -> None:
         elif name == "summarize_clip":
             segments = [(segment["start"], segment["end"]) for segment in params.get("segments", [])]
             current_path = extract_segments(current_path, state.working_dir, segments)
+        elif name in {"add_auto_broll", "add_auto_visuals"}:
+            overlays = _load_visual_overlays(params)
+            if not overlays:
+                raise VideoEngineError(
+                    f"Cannot rebuild project because stored overlays are missing for {name}."
+                )
+            current_path = apply_visual_overlays(current_path, state.working_dir, overlays)
     state.working_file = current_path
     state.metadata = probe_video(current_path)
     state.save()

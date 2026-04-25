@@ -230,6 +230,8 @@ def execute(params: dict, state: ProjectState) -> dict:
                     "max_overlays": max_overlays,
                     "min_overlay_sec": min_overlay_sec,
                     "max_overlay_sec": max_overlay_sec,
+                    "manifest_path": str(manifest_path),
+                    "overlays": applied_overlays,
                 },
                 "timestamp": utc_now_iso(),
                 "result_file": output_path,

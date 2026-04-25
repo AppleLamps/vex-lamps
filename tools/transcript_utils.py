@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from pathlib import Path
@@ -38,6 +39,14 @@ def parse_srt(path: Path) -> list[dict[str, float | str]]:
     return segments
 
 
+def write_json(path: Path, payload: object) -> None:
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def load_json(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def write_srt_segments(path: Path, segments: list[dict[str, float | str]]) -> None:
     srt_lines: list[str] = []
     for index, segment in enumerate(segments, start=1):
@@ -53,6 +62,111 @@ def write_srt_segments(path: Path, segments: list[dict[str, float | str]]) -> No
             ]
         )
     path.write_text("\n".join(srt_lines), encoding="utf-8")
+
+
+def clean_transcript_text(text: str) -> str:
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    collapsed = re.sub(r"\s+([,.;:!?])", r"\1", collapsed)
+    return collapsed
+
+
+def build_sentence_segments(
+    words: list[dict[str, float | str]],
+    fallback_segments: list[dict[str, float | str]] | None = None,
+    max_words_per_sentence: int = 18,
+    max_duration_sec: float = 4.5,
+) -> list[dict[str, float | str]]:
+    sentences: list[dict[str, float | str]] = []
+    if words:
+        current: list[dict[str, float | str]] = []
+        for word in words:
+            if word.get("start") is None or word.get("end") is None:
+                continue
+            current.append(word)
+            word_text = str(word.get("text") or "").strip()
+            current_duration = float(current[-1]["end"]) - float(current[0]["start"])
+            boundary = (
+                word_text.endswith((".", "?", "!", ";", ":"))
+                or len(current) >= max_words_per_sentence
+                or current_duration >= max_duration_sec
+            )
+            if not boundary:
+                continue
+            sentence_text = clean_transcript_text(" ".join(str(item.get("text") or "").strip() for item in current))
+            if sentence_text:
+                sentences.append(
+                    {
+                        "index": len(sentences) + 1,
+                        "start": round(float(current[0]["start"]), 3),
+                        "end": round(float(current[-1]["end"]), 3),
+                        "text": sentence_text,
+                        "word_start_index": int(current[0].get("index", len(sentences) + 1)),
+                        "word_end_index": int(current[-1].get("index", len(current))),
+                    }
+                )
+            current = []
+        if current:
+            sentence_text = clean_transcript_text(" ".join(str(item.get("text") or "").strip() for item in current))
+            if sentence_text:
+                sentences.append(
+                    {
+                        "index": len(sentences) + 1,
+                        "start": round(float(current[0]["start"]), 3),
+                        "end": round(float(current[-1]["end"]), 3),
+                        "text": sentence_text,
+                        "word_start_index": int(current[0].get("index", len(sentences) + 1)),
+                        "word_end_index": int(current[-1].get("index", len(current))),
+                    }
+                )
+        return sentences
+
+    for index, segment in enumerate(fallback_segments or [], start=1):
+        text = clean_transcript_text(str(segment.get("text") or ""))
+        if not text:
+            continue
+        sentences.append(
+            {
+                "index": index,
+                "start": round(float(segment["start"]), 3),
+                "end": round(float(segment["end"]), 3),
+                "text": text,
+            }
+        )
+    return sentences
+
+
+def load_transcript_bundle(working_dir: str | Path) -> dict[str, object]:
+    root = Path(working_dir)
+    segment_path = root / "transcript.segments.json"
+    word_path = root / "transcript.words.json"
+    sentence_path = root / "transcript.sentences.json"
+    txt_path = root / "transcript.txt"
+    srt_path = root / "transcript.srt"
+
+    segments = load_json(segment_path) if segment_path.is_file() else parse_srt(srt_path) if srt_path.is_file() else []
+    words = load_json(word_path) if word_path.is_file() else []
+    sentences = (
+        load_json(sentence_path)
+        if sentence_path.is_file()
+        else build_sentence_segments(
+            words if isinstance(words, list) else [],
+            fallback_segments=segments if isinstance(segments, list) else [],
+        )
+    )
+    transcript_text = txt_path.read_text(encoding="utf-8").strip() if txt_path.is_file() else ""
+    return {
+        "transcript_text": transcript_text,
+        "segments": segments if isinstance(segments, list) else [],
+        "words": words if isinstance(words, list) else [],
+        "sentences": sentences if isinstance(sentences, list) else [],
+        "paths": {
+            "txt": str(txt_path),
+            "srt": str(srt_path),
+            "segments": str(segment_path),
+            "words": str(word_path),
+            "sentences": str(sentence_path),
+        },
+    }
 
 
 def _wrap_caption_words(words: list[str], max_chars_per_line: int, max_lines: int) -> str:

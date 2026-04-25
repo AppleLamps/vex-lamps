@@ -154,6 +154,19 @@ class ProjectState:
                 "Latest auto b-roll: "
                 f"{latest_auto_broll.get('count', 0)} inserts @ {latest_auto_broll.get('manifest_path', 'unknown')}"
             )
+        latest_transcript = (self.artifacts or {}).get("latest_transcript")
+        if latest_transcript:
+            lines.append(
+                "Latest transcript: "
+                f"{latest_transcript.get('segment_count', 0)} segments / "
+                f"{latest_transcript.get('word_count', 0)} words @ {latest_transcript.get('srt_path', 'unknown')}"
+            )
+        latest_auto_visuals = (self.artifacts or {}).get("latest_auto_visuals")
+        if latest_auto_visuals:
+            lines.append(
+                "Latest auto visuals: "
+                f"{latest_auto_visuals.get('count', 0)} inserts @ {latest_auto_visuals.get('manifest_path', 'unknown')}"
+            )
         if self.timeline:
             lines.append("Timeline:")
             for index, op in enumerate(self.timeline, start=1):
