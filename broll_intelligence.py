@@ -118,9 +118,9 @@ def call_reasoning_model(provider_name: str, model_name: str, system_prompt: str
     response = client.models.generate_content(
         model=model_name or config.GEMINI_MODEL,
         contents=user_prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        config=config.build_gemini_generation_config(
+            system_prompt,
+            model_name=model_name or config.GEMINI_MODEL,
         ),
     )
     return getattr(response, "text", "") or ""

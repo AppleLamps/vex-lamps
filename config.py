@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+from google.genai import types
 
 PROVIDER = "gemini"
 GEMINI_API_KEY = None
@@ -17,6 +18,27 @@ AGENT_PROJECTS_DIR = os.path.expanduser("~/.video-agent/projects/")
 FFMPEG_PATH = "ffmpeg"
 WHISPER_MODEL = "base"
 VERSION = "1.0.0"
+
+
+def gemini_supports_thinking_config(model_name: str | None = None) -> bool:
+    normalized = (model_name or GEMINI_MODEL or "").strip().lower()
+    return normalized.startswith("gemini")
+
+
+def build_gemini_generation_config(
+    system_prompt: str,
+    *,
+    model_name: str | None = None,
+    tools: list[types.Tool] | None = None,
+) -> types.GenerateContentConfig:
+    kwargs: dict[str, object] = {
+        "system_instruction": system_prompt,
+    }
+    if tools:
+        kwargs["tools"] = tools
+    if gemini_supports_thinking_config(model_name):
+        kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+    return types.GenerateContentConfig(**kwargs)
 
 
 def _print_and_exit(message: str) -> None:

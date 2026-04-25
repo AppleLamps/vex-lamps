@@ -137,10 +137,10 @@ class GeminiProvider(BaseLLMProvider):
         return native_messages
 
     def _build_config(self, tools: list[dict], system_prompt: str) -> types.GenerateContentConfig:
-        return types.GenerateContentConfig(
-            system_instruction=system_prompt,
+        return config.build_gemini_generation_config(
+            system_prompt,
+            model_name=self._model_name,
             tools=self._build_tools(tools),
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
         )
 
     def chat(

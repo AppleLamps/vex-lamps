@@ -85,9 +85,9 @@ def _select_segments_with_llm(
         response = client.models.generate_content(
             model=model_name or config.GEMINI_MODEL,
             contents=user_prompt,
-            config=types.GenerateContentConfig(
-                system_instruction=system_prompt,
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            config=config.build_gemini_generation_config(
+                system_prompt,
+                model_name=model_name or config.GEMINI_MODEL,
             ),
         )
         raw_text = getattr(response, "text", "") or ""
