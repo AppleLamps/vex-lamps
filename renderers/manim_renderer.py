@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import config
 from engine import probe_video
 from renderers.base import RenderedAsset, RendererStatus, VisualRenderer, VisualRendererError
 from vex_manim.briefs import build_scene_brief
@@ -20,7 +21,7 @@ from vex_manim.scene_library import retrieve_scene_examples
 from vex_manim.validator import validate_generated_scene_code
 
 
-MANIM_CACHE_VERSION = "2026-04-26-v2"
+MANIM_CACHE_VERSION = "2026-04-26-v3"
 MAX_GENERATION_ATTEMPTS = 2
 _LATEX_RUNTIME_READY_CACHE: bool | None = None
 LEGACY_TEMPLATE_ALIASES = {
@@ -232,7 +233,10 @@ class {scene_name}(Scene):
             hero = glass_card(5.55, 4.15, fill=panel_fill, stroke=panel_stroke, radius=0.28)
             hero.to_edge(LEFT, buff=1.0)
             hero.shift(DOWN * 1.32 + RIGHT * 0.08)
-            value = clamp_text(str(SPEC.get("emphasis_text") or SPEC.get("headline") or "Key Point"), max_width=4.3, max_font_size=74, min_font_size=38, color=primary)
+            value_source = str(SPEC.get("emphasis_text") or SPEC.get("headline") or "Key Point").strip()
+            if any(character.isdigit() for character in str(SPEC.get("headline") or "")):
+                value_source = str(SPEC.get("headline") or value_source).strip()
+            value = clamp_text(value_source, max_width=4.3, max_font_size=74, min_font_size=38, color=primary)
             value.move_to(hero[0].get_center() + LEFT * 0.16 + UP * 0.18)
             kicker = clamp_text("MEASURABLE CHANGE", max_width=3.1, max_font_size=17, min_font_size=12, color=accent_secondary, weight=BOLD)
             kicker.move_to(hero[0].get_top() + DOWN * 0.64 + LEFT * 0.54)
@@ -257,7 +261,7 @@ class {scene_name}(Scene):
             if len(header) > 0:
                 self.play(FadeIn(header_marker), FadeIn(header, shift=RIGHT * 0.16), run_time=intro)
             self.play(DrawBorderThenFill(hero[0]), FadeIn(hero[1], scale=0.98), run_time=accent)
-            self.play(FadeIn(kicker, shift=UP * 0.08), Write(value), Create(accent_rule), LaggedStart(*[FadeIn(dot, scale=0.85) for dot in dots], lag_ratio=0.08), run_time=reveal)
+            self.play(FadeIn(kicker, shift=UP * 0.08), FadeIn(value, shift=UP * 0.12, scale=0.96), Create(accent_rule), LaggedStart(*[FadeIn(dot, scale=0.85) for dot in dots], lag_ratio=0.08), run_time=reveal)
             self.play(FadeIn(support_rail), FadeIn(support_label, shift=LEFT * 0.12), LaggedStart(*[FadeIn(card, shift=LEFT * 0.15) for card in support_cards], lag_ratio=0.12), run_time=0.58)
             self.wait(settle)
             return
@@ -493,7 +497,9 @@ def _scene_wrapper(scene_code: str, spec: dict[str, Any], brief_payload: dict[st
     return (
         "from __future__ import annotations\n\n"
         "import json\n\n"
+        "import manim\n"
         "from manim import *\n"
+        "from manim.utils.rate_functions import *\n"
         "from vex_manim.runtime import *\n\n"
         f"SCENE_SPEC = json.loads(r'''{spec_json}''')\n"
         f"SCENE_BRIEF = json.loads(r'''{brief_json}''')\n\n"
@@ -578,6 +584,73 @@ def _feedback_lines(validation_report: dict[str, Any], quality_report: dict[str,
         if cleaned and cleaned not in deduped:
             deduped.append(cleaned)
     return deduped[:14]
+
+
+def _is_duration_issue(issue: str) -> bool:
+    return str(issue or "").startswith("Preview duration drifted from the target")
+
+
+def _is_static_issue(issue: str) -> bool:
+    return str(issue or "").startswith("The scene is too static for the requested intensity")
+
+
+def _has_strong_motion_grammar(brief, validation) -> bool:
+    profile = validation.profile
+    return (
+        profile.dynamic_device_count >= max(int(brief.minimum_dynamic_devices) + 2, 4)
+        and len(profile.advanced_features) >= 2
+        and (profile.camera_move_mentions > 0 or "always_redraw" in profile.advanced_features or "ValueTracker" in profile.advanced_features)
+        and (profile.premium_helper_calls >= 2 or profile.play_calls >= 5)
+    )
+
+
+def _can_soft_accept_quality(brief, validation, quality) -> bool:
+    if quality.passed:
+        return True
+    if quality.layout is not None and not quality.layout.passed:
+        return False
+    if quality.score < 0.88:
+        return False
+    issues = list(quality.issues)
+    if not issues:
+        return False
+    has_static_issue = any(_is_static_issue(issue) for issue in issues)
+    if has_static_issue and not _has_strong_motion_grammar(brief, validation):
+        return False
+    return all(_is_duration_issue(issue) or _is_static_issue(issue) for issue in issues)
+
+
+def _retime_rendered_video(
+    input_path: Path,
+    output_path: Path,
+    *,
+    target_duration_sec: float,
+    actual_duration_sec: float,
+) -> Path:
+    if target_duration_sec <= 0 or actual_duration_sec <= 0:
+        return input_path
+    setpts_factor = target_duration_sec / actual_duration_sec
+    command = [
+        config.FFMPEG_PATH,
+        "-i",
+        str(input_path),
+        "-vf",
+        f"setpts={setpts_factor:.8f}*PTS",
+        "-an",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        "-y",
+        str(output_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = (result.stderr or result.stdout or "").strip()
+        raise VisualRendererError(f"Failed to retime generated Manim clip: {stderr}")
+    return output_path
 
 
 def _history_roots(spec: dict[str, Any]) -> list[Path]:
@@ -890,10 +963,12 @@ class ManimRenderer(VisualRenderer):
                 continue
 
             attempts.append(attempt_record)
-            if quality.passed:
+            soft_accept = _can_soft_accept_quality(brief, validation, quality)
+            attempt_record["quality_soft_accept"] = soft_accept
+            if quality.passed or soft_accept:
                 chosen_scene_source = scene_source
                 chosen_candidate = candidate
-                chosen_quality = quality.to_dict()
+                chosen_quality = {**quality.to_dict(), "soft_accept": soft_accept}
                 break
 
             previous_code = candidate.scene_code
@@ -924,6 +999,7 @@ class ManimRenderer(VisualRenderer):
             "animation_intensity": brief.animation_intensity,
             "selected_examples": [example.example_id for example in examples],
             "quality_score": (chosen_quality or {}).get("score"),
+            "quality_soft_accept": bool((chosen_quality or {}).get("soft_accept")),
             "fallback_used": fallback_used,
             "attempt_budget": attempt_budget,
         }
@@ -998,6 +1074,29 @@ class ManimRenderer(VisualRenderer):
             fps=fps,
         )
         video_metadata = probe_video(str(asset_path))
+        target_duration_sec = float(spec.get("duration") or 0.0)
+        actual_duration_sec = float(video_metadata.get("duration_sec") or 0.0)
+        if (
+            scene_metadata.get("scene_generation_mode") == "llm_codegen"
+            and not scene_metadata.get("fallback_used")
+            and not bool(video_metadata.get("has_audio"))
+            and target_duration_sec > 0.0
+            and actual_duration_sec > 0.0
+            and abs(actual_duration_sec - target_duration_sec) > 0.12
+        ):
+            retimed_path = job_dir / f"{Path(asset_path).stem}_retimed.mp4"
+            asset_path = _retime_rendered_video(
+                asset_path,
+                retimed_path,
+                target_duration_sec=target_duration_sec,
+                actual_duration_sec=actual_duration_sec,
+            )
+            video_metadata = probe_video(str(asset_path))
+            scene_metadata = {
+                **scene_metadata,
+                "retime_source_duration_sec": round(actual_duration_sec, 3),
+                "retimed_to_duration_sec": round(target_duration_sec, 3),
+            }
         final_asset = RenderedAsset(
             asset_path=str(asset_path),
             width=int(video_metadata.get("width") or width),

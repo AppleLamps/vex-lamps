@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import json
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -19,6 +21,62 @@ class SceneCandidate:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+RUNTIME_HELPER_NAMES = {
+    "apply_house_background",
+    "make_title_block",
+    "make_pill",
+    "make_glass_panel",
+    "make_signal_node",
+    "make_connector",
+    "make_glow_dot",
+    "make_orbit_ring",
+    "make_route_path",
+    "make_focus_beam",
+    "make_metric_badge",
+    "make_ribbon_label",
+    "fit_text",
+    "theme_color",
+    "camera_focus",
+    "register_layout_group",
+    "register_text_group",
+    "register_panel_group",
+    "stagger_fade_in",
+}
+
+RATE_FUNCTION_NAMES = {
+    "ease_in_sine",
+    "ease_out_sine",
+    "ease_in_out_sine",
+    "ease_in_quad",
+    "ease_out_quad",
+    "ease_in_out_quad",
+    "ease_in_cubic",
+    "ease_out_cubic",
+    "ease_in_out_cubic",
+    "ease_in_quart",
+    "ease_out_quart",
+    "ease_in_out_quart",
+    "ease_in_quint",
+    "ease_out_quint",
+    "ease_in_out_quint",
+    "ease_in_expo",
+    "ease_out_expo",
+    "ease_in_out_expo",
+    "ease_in_circ",
+    "ease_out_circ",
+    "ease_in_out_circ",
+    "ease_in_back",
+    "ease_out_back",
+    "ease_in_out_back",
+    "ease_in_bounce",
+    "ease_out_bounce",
+    "ease_in_out_bounce",
+    "ease_in_elastic",
+    "ease_out_elastic",
+    "ease_in_out_elastic",
+}
 
 
 def _examples_block(examples: list[SceneExample]) -> str:
@@ -47,6 +105,7 @@ def _system_prompt() -> str:
         "You must output ONLY a JSON object with keys summary, features, scene_code. "
         "scene_code must define exactly one class named GeneratedScene that subclasses VexGeneratedScene. "
         "Use real Manim constructs and keep the code self-contained. "
+        "Every VexGeneratedScene helper must be called as self.helper_name(...), never as a bare helper_name(...). "
         "Forbidden: filesystem access, network access, subprocess calls, os/sys/pathlib/shutil usage, eval/exec/open, or any code outside of animation needs. "
         "Assume SCENE_SPEC and SCENE_BRIEF globals exist, and that VexGeneratedScene already provides themed helpers like apply_house_background, make_title_block, make_pill, make_glass_panel, make_signal_node, make_connector, make_glow_dot, make_orbit_ring, make_route_path, make_focus_beam, make_metric_badge, make_ribbon_label, fit_text, camera_focus, and register_layout_group."
     )
@@ -86,6 +145,7 @@ def _user_prompt(
         "Hard requirements:\n"
         "- Start from VexGeneratedScene and build a real animated scene.\n"
         "- Add the title treatment with make_title_block unless the scene has a stronger editorial framing.\n"
+        "- Call runtime helpers as self.make_title_block(...), self.make_orbit_ring(...), self.camera_focus(...), and so on; never use bare helper calls.\n"
         "- Register the principal visible groups with register_layout_group(name, group, role=...) so runtime layout guardrails can keep the scene clean.\n"
         "- Register at least a title/hero group and one or two supporting groups whenever they exist.\n"
         "- Keep the pacing within the target duration.\n"
@@ -103,11 +163,81 @@ def _user_prompt(
     )
 
 
+def _recover_scene_code_from_raw_text(raw_text: str) -> str:
+    code_fence_match = re.search(r"```(?:python)?\s*(?P<code>[\s\S]*?)```", raw_text, re.IGNORECASE)
+    if code_fence_match:
+        code = str(code_fence_match.group("code") or "").strip()
+        if "class GeneratedScene" in code:
+            return code
+    class_match = re.search(r"(class\s+GeneratedScene\b[\s\S]+)", raw_text)
+    if class_match:
+        return str(class_match.group(1) or "").strip()
+    return ""
+
+
+def _repair_scene_code(scene_code: str) -> str:
+    cleaned = str(scene_code or "").strip()
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"^```(?:python)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE | re.MULTILINE).strip()
+    try:
+        tree = ast.parse(cleaned)
+    except SyntaxError:
+        return cleaned
+
+    class HelperQualifier(ast.NodeTransformer):
+        def visit_Call(self, node: ast.Call) -> ast.AST:
+            self.generic_visit(node)
+            if isinstance(node.func, ast.Name) and node.func.id in RUNTIME_HELPER_NAMES:
+                node.func = ast.Attribute(value=ast.Name(id="self", ctx=ast.Load()), attr=node.func.id, ctx=ast.Load())
+            return node
+
+        def visit_Name(self, node: ast.Name) -> ast.AST:
+            if isinstance(node.ctx, ast.Load) and node.id in RATE_FUNCTION_NAMES:
+                return ast.Attribute(
+                    value=ast.Attribute(value=ast.Name(id="manim", ctx=ast.Load()), attr="rate_functions", ctx=ast.Load()),
+                    attr=node.id,
+                    ctx=ast.Load(),
+                )
+            return node
+
+    repaired_tree = ast.fix_missing_locations(HelperQualifier().visit(tree))
+    try:
+        return ast.unparse(repaired_tree).strip()
+    except Exception:
+        return cleaned
+
+
 def _parse_candidate(raw_text: str) -> SceneCandidate:
-    payload = json.loads(extract_json_object(raw_text))
+    payload: dict[str, Any] = {}
+    extracted_object = ""
+    try:
+        extracted_object = extract_json_object(raw_text)
+    except Exception:
+        extracted_object = ""
+    if extracted_object:
+        try:
+            parsed = json.loads(extracted_object)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            try:
+                parsed = ast.literal_eval(extracted_object)
+                if isinstance(parsed, dict):
+                    payload = parsed
+            except Exception:
+                payload = {}
     scene_code = str(payload.get("scene_code") or "").strip()
+    if not scene_code:
+        scene_code = _recover_scene_code_from_raw_text(raw_text)
+    scene_code = _repair_scene_code(scene_code)
+    if not scene_code:
+        raise ValueError("Could not recover GeneratedScene code from model response.")
     summary = truncate(str(payload.get("summary") or "Generated Manim scene."), 220)
-    features = [truncate(str(item), 40) for item in payload.get("features", []) if str(item).strip()][:10]
+    raw_features = payload.get("features", [])
+    if not isinstance(raw_features, list):
+        raw_features = []
+    features = [truncate(str(item), 40) for item in raw_features if str(item).strip()][:10]
     return SceneCandidate(summary=summary, features=features, scene_code=scene_code)
 
 

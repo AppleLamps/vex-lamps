@@ -213,15 +213,33 @@ class VexGeneratedScene(MovingCameraScene):
         deck: str | None = None,
         *,
         max_width: float = 8.6,
+        color: str | None = None,
+        deck_color: str | None = None,
+        eyebrow_fill: str | None = None,
+        eyebrow_text_color: str | None = None,
     ) -> VGroup:
         header = VGroup()
         eyebrow_value = str(eyebrow or self.spec.get("eyebrow") or "").strip()
         headline_value = str(headline or self.spec.get("headline") or "").strip()
         deck_value = str(deck or self.spec.get("deck") or "").strip()
         if eyebrow_value:
-            header.add(self.make_pill(eyebrow_value))
+            header.add(
+                self.make_pill(
+                    eyebrow_value,
+                    fill=eyebrow_fill or self.theme_color("eyebrow_fill"),
+                    text_color=eyebrow_text_color or self.theme_color("eyebrow_text"),
+                )
+            )
         if headline_value:
-            header.add(self.fit_text(headline_value, max_width=max_width, max_font_size=52, min_font_size=28))
+            header.add(
+                self.fit_text(
+                    headline_value,
+                    max_width=max_width,
+                    max_font_size=52,
+                    min_font_size=28,
+                    color=color or self.theme_color("text_primary"),
+                )
+            )
         if deck_value:
             header.add(
                 self.fit_text(
@@ -229,7 +247,7 @@ class VexGeneratedScene(MovingCameraScene):
                     max_width=max_width,
                     max_font_size=24,
                     min_font_size=16,
-                    color=self.theme_color("text_secondary"),
+                    color=deck_color or self.theme_color("text_secondary"),
                     weight=MEDIUM,
                 )
             )
@@ -331,14 +349,17 @@ class VexGeneratedScene(MovingCameraScene):
 
     def make_focus_beam(
         self,
-        width: float,
-        height: float,
+        width: float | None = None,
+        height: float | None = None,
         *,
+        length: float | None = None,
         color: str | None = None,
         opacity: float = 0.14,
         angle: float = -0.28,
     ) -> Rectangle:
-        beam = Rectangle(width=width, height=height)
+        resolved_width = float(width if width is not None else length if length is not None else 4.8)
+        resolved_height = float(height if height is not None else 0.42)
+        beam = Rectangle(width=resolved_width, height=resolved_height)
         beam.set_fill(ManimColor(color or self.theme_color("glow")), opacity=opacity)
         beam.set_stroke(width=0)
         beam.rotate(angle)
@@ -351,15 +372,17 @@ class VexGeneratedScene(MovingCameraScene):
         width: float = 2.1,
         fill: str | None = None,
         text_color: str | None = None,
+        color: str | None = None,
     ) -> VGroup:
+        resolved_fill = fill or color or self.theme_color("accent")
         shell = self.make_pill(
             text,
-            fill=fill or self.theme_color("accent"),
+            fill=resolved_fill,
             text_color=text_color or self.theme_color("background"),
             width=width,
         )
         halo = shell[0].copy().scale(1.18).set_fill(opacity=0).set_stroke(
-            ManimColor(fill or self.theme_color("accent")),
+            ManimColor(resolved_fill),
             width=2.0,
             opacity=0.16,
         )
@@ -372,8 +395,10 @@ class VexGeneratedScene(MovingCameraScene):
         max_width: float = 4.8,
         accent: str | None = None,
         text_color: str | None = None,
+        color: str | None = None,
     ) -> VGroup:
-        line = Line(LEFT * 1.6, RIGHT * 1.6, color=ManimColor(accent or self.theme_color("accent")), stroke_width=5)
+        resolved_accent = accent or color or self.theme_color("accent")
+        line = Line(LEFT * 1.6, RIGHT * 1.6, color=ManimColor(resolved_accent), stroke_width=5)
         label = self.fit_text(
             text,
             max_width=max_width,

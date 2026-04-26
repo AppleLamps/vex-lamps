@@ -21,7 +21,7 @@ from broll_intelligence import (
     writable_dir_candidates,
 )
 from engine import VideoEngineError, apply_b_roll_overlays, probe_video
-from state import ProjectState, utc_now_iso
+from state import ProjectState, restrict_timed_items_to_available_ranges, utc_now_iso
 from tools.transcript import execute as transcribe
 from tools.transcript_utils import parse_srt
 
@@ -57,14 +57,20 @@ def execute(params: dict, state: ProjectState) -> dict:
         metadata = state.metadata or probe_video(state.working_file)
         clip_duration = float(metadata.get("duration_sec") or 0.0)
         target_orientation = video_orientation(int(metadata.get("width") or 0), int(metadata.get("height") or 0))
+        blocked_ranges = state.replace_overlay_ranges()
         provider_name = (state.provider or config.PROVIDER or "gemini").strip().lower()
         if provider_name not in {"gemini", "claude"}:
             provider_name = "gemini"
         model_name = state.model or (config.CLAUDE_MODEL if provider_name == "claude" else config.GEMINI_MODEL)
 
         cards = build_context_cards(transcript_segments, clip_duration)
+        cards = restrict_timed_items_to_available_ranges(
+            cards,
+            blocked_ranges,
+            min_duration_sec=max(0.5, min_overlay_sec * 0.6),
+        )
         if not cards:
-            raise RuntimeError("No subtitle-aligned transcript cards were available for B-roll planning.")
+            raise RuntimeError("No subtitle-aligned transcript cards were available for B-roll planning after respecting existing full-screen overlay windows.")
         plan = analyze_broll_plan_with_llm(
             provider_name=provider_name,
             model_name=model_name,
@@ -74,6 +80,11 @@ def execute(params: dict, state: ProjectState) -> dict:
             min_overlay_sec=min_overlay_sec,
             max_overlay_sec=max_overlay_sec,
             orientation=target_orientation,
+        )
+        plan = restrict_timed_items_to_available_ranges(
+            plan,
+            blocked_ranges,
+            min_duration_sec=min_overlay_sec,
         )
 
         cache_dir = ensure_writable_dir(writable_dir_candidates(state.working_dir, state.output_dir, state.project_id, "pexels_cache"))
@@ -170,6 +181,7 @@ def execute(params: dict, state: ProjectState) -> dict:
             "pexels_attribution_required": True,
             "pexels_link": "https://www.pexels.com",
             "rate_limits": rate_limits,
+            "blocked_ranges": blocked_ranges,
             "plan": plan,
             "overlays": applied_overlays,
             "planning_failures": planning_failures,

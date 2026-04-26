@@ -14,6 +14,91 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def merge_time_ranges(
+    ranges: list[tuple[float, float]],
+    *,
+    gap_sec: float = 0.0,
+) -> list[tuple[float, float]]:
+    merged: list[list[float]] = []
+    for start_sec, end_sec in sorted(ranges, key=lambda item: item[0]):
+        start_value = float(start_sec)
+        end_value = float(end_sec)
+        if end_value <= start_value:
+            continue
+        if not merged or start_value > merged[-1][1] + gap_sec:
+            merged.append([start_value, end_value])
+            continue
+        merged[-1][1] = max(merged[-1][1], end_value)
+    return [(start_sec, end_sec) for start_sec, end_sec in merged]
+
+
+def clip_time_range_to_available_window(
+    start_sec: float,
+    end_sec: float,
+    blocked_ranges: list[tuple[float, float]],
+    *,
+    min_duration_sec: float = 0.0,
+) -> tuple[float, float] | None:
+    start_value = float(start_sec)
+    end_value = float(end_sec)
+    if end_value <= start_value:
+        return None
+    available: list[tuple[float, float]] = [(start_value, end_value)]
+    for blocked_start, blocked_end in merge_time_ranges(blocked_ranges):
+        next_available: list[tuple[float, float]] = []
+        for candidate_start, candidate_end in available:
+            if blocked_end <= candidate_start or blocked_start >= candidate_end:
+                next_available.append((candidate_start, candidate_end))
+                continue
+            if blocked_start > candidate_start:
+                next_available.append((candidate_start, min(blocked_start, candidate_end)))
+            if blocked_end < candidate_end:
+                next_available.append((max(blocked_end, candidate_start), candidate_end))
+        available = next_available
+        if not available:
+            return None
+    viable = [
+        (candidate_start, candidate_end)
+        for candidate_start, candidate_end in available
+        if candidate_end - candidate_start >= min_duration_sec
+    ]
+    if not viable:
+        return None
+    candidate_start, candidate_end = max(viable, key=lambda item: (item[1] - item[0], -item[0]))
+    return round(candidate_start, 3), round(candidate_end, 3)
+
+
+def restrict_timed_items_to_available_ranges(
+    items: list[dict[str, Any]],
+    blocked_ranges: list[tuple[float, float]],
+    *,
+    min_duration_sec: float = 0.0,
+    start_key: str = "start",
+    end_key: str = "end",
+) -> list[dict[str, Any]]:
+    if not blocked_ranges:
+        return list(items)
+    restricted: list[dict[str, Any]] = []
+    for item in items:
+        try:
+            start_sec = float(item.get(start_key, 0.0))
+            end_sec = float(item.get(end_key, start_sec))
+        except (TypeError, ValueError):
+            continue
+        clipped = clip_time_range_to_available_window(
+            start_sec,
+            end_sec,
+            blocked_ranges,
+            min_duration_sec=min_duration_sec,
+        )
+        if clipped is None:
+            continue
+        adjusted = dict(item)
+        adjusted[start_key], adjusted[end_key] = clipped
+        restricted.append(adjusted)
+    return restricted
+
+
 @dataclass
 class ProjectState:
     project_id: str
@@ -224,3 +309,35 @@ class ProjectState:
                     f"  {index}. {op['op']} - {op.get('description', '')} @ {op.get('timestamp', '')}"
                 )
         return "\n".join(lines)
+
+    def replace_overlay_ranges(
+        self,
+        *,
+        exclude_ops: set[str] | None = None,
+    ) -> list[tuple[float, float]]:
+        blocked_ranges: list[tuple[float, float]] = []
+        excluded = exclude_ops or set()
+        for op in self.timeline:
+            op_name = str(op.get("op") or "").strip()
+            if op_name in excluded:
+                continue
+            overlays = (op.get("params") or {}).get("overlays") or []
+            if not isinstance(overlays, list):
+                continue
+            for overlay in overlays:
+                if not isinstance(overlay, dict):
+                    continue
+                compose_mode = str(
+                    overlay.get("compose_mode") or overlay.get("composition_mode") or "replace"
+                ).strip().lower()
+                if compose_mode in {"pip", "overlay", "picture_in_picture", "picture-in-picture"}:
+                    continue
+                try:
+                    start_sec = float(overlay.get("start", 0.0))
+                    end_sec = float(overlay.get("end", start_sec))
+                except (TypeError, ValueError):
+                    continue
+                if end_sec - start_sec < 0.08:
+                    continue
+                blocked_ranges.append((start_sec, end_sec))
+        return merge_time_ranges(blocked_ranges, gap_sec=0.08)

@@ -9,7 +9,7 @@ import config
 from broll_intelligence import ensure_writable_dir, safe_stem, writable_dir_candidates
 from engine import VideoEngineError, apply_visual_overlays, probe_video
 from renderers import VisualRendererError, renderer_capabilities, resolve_renderer
-from state import ProjectState, utc_now_iso
+from state import ProjectState, restrict_timed_items_to_available_ranges, utc_now_iso
 from tools.transcript import execute as transcribe
 from tools.transcript_utils import load_transcript_bundle
 from visual_intelligence import (
@@ -102,6 +102,7 @@ def _plan_cache_key(
     min_visual_sec: float,
     max_visual_sec: float,
     scene_cuts: list[float],
+    blocked_ranges: list[tuple[float, float]],
     available_renderers: list[dict[str, object]],
 ) -> str:
     payload = {
@@ -113,6 +114,7 @@ def _plan_cache_key(
         "min_visual_sec": round(min_visual_sec, 3),
         "max_visual_sec": round(max_visual_sec, 3),
         "scene_cuts": [round(float(item), 3) for item in scene_cuts],
+        "blocked_ranges": [[round(start_sec, 3), round(end_sec, 3)] for start_sec, end_sec in blocked_ranges],
         "cards": cards,
         "available_renderers": available_renderers,
     }
@@ -207,6 +209,7 @@ def execute(params: dict, state: ProjectState) -> dict:
         transcript_segments = list(transcript_bundle.get("segments") or [])
         transcript_words = list(transcript_bundle.get("words") or [])
         sentence_segments = list(transcript_bundle.get("sentences") or [])
+        blocked_ranges = state.replace_overlay_ranges()
         scene_cuts = detect_scene_cuts(state.working_file)
         cards = build_visual_context_cards(
             sentence_segments,
@@ -215,8 +218,13 @@ def execute(params: dict, state: ProjectState) -> dict:
             words=transcript_words,
             scene_cuts=scene_cuts,
         )
+        cards = restrict_timed_items_to_available_ranges(
+            cards,
+            blocked_ranges,
+            min_duration_sec=max(0.45, min_visual_sec * 0.5),
+        )
         if not cards:
-            raise RuntimeError("No transcript-aligned visual cards were available for planning.")
+            raise RuntimeError("No transcript-aligned visual cards were available for planning after respecting existing full-screen overlay windows.")
         provider_name, model_name = _provider_and_model(state)
         capabilities = renderer_capabilities()
         bundle_root = ensure_writable_dir(
@@ -232,6 +240,7 @@ def execute(params: dict, state: ProjectState) -> dict:
             min_visual_sec=min_visual_sec,
             max_visual_sec=max_visual_sec,
             scene_cuts=scene_cuts,
+            blocked_ranges=blocked_ranges,
             available_renderers=capabilities,
         )
         plan = _load_cached_plan(plan_cache_root, plan_cache_key)
@@ -247,6 +256,11 @@ def execute(params: dict, state: ProjectState) -> dict:
                 max_visual_sec=max_visual_sec,
                 scene_cuts=scene_cuts,
                 available_renderers=capabilities,
+            )
+            plan = restrict_timed_items_to_available_ranges(
+                plan,
+                blocked_ranges,
+                min_duration_sec=min_visual_sec,
             )
             _store_cached_plan(plan_cache_root, plan_cache_key, plan)
         timestamp_label = utc_now_iso().replace(":", "-").replace("+00:00", "Z")
@@ -391,6 +405,7 @@ def execute(params: dict, state: ProjectState) -> dict:
             "plan_cache_key": plan_cache_key,
             "transcript_paths": transcript_bundle.get("paths", {}),
             "scene_cuts": scene_cuts,
+            "blocked_ranges": blocked_ranges,
             "plan": plan,
             "overlays": applied_overlays,
             "render_failures": render_failures,
