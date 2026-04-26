@@ -42,12 +42,12 @@ def initialize_runtime() -> None:
 
 def print_banner(model_name: str) -> None:
     banner = (
-        "   __      ________  __\n"
-        "   \\ \\    / /  ____| \\ \\\n"
-        "    \\ \\  / /| |__     \\ \\\n"
-        "     \\ \\/ / |  __|    / /\n"
-        "     / /\\ \\ | |____  / /\n"
-        "    /_/  \\_\\|______|/_/\n\n"
+        " __      ________  __   __\n"
+        " \\ \\    / /  ____| \\ \\ / /\n"
+        "  \\ \\  / /| |__     \\ V /\n"
+        "   \\ \\/ / |  __|     > <\n"
+        "    \\  /  | |____   / . \\\n"
+        "     \\/   |______| /_/ \\_\\\n\n"
         f"  v{config.VERSION}  |  {model_name}  |  multi-provider ready"
     )
     console.print(Panel.fit(banner, border_style="cyan", title="Vex"))

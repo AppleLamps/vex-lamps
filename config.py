@@ -20,6 +20,10 @@ FFMPEG_PATH = "ffmpeg"
 BLENDER_PATH = "blender"
 WHISPER_MODEL = "base"
 VERSION = "1.0.0"
+GENAI_TIMEOUT_SEC = 90
+ANTHROPIC_TIMEOUT_SEC = 90.0
+MANIM_PREVIEW_TIMEOUT_SEC = 75
+MANIM_FINAL_TIMEOUT_SEC = 240
 
 
 def gemini_supports_thinking_config(model_name: str | None = None) -> bool:
@@ -41,6 +45,10 @@ def build_gemini_generation_config(
     if gemini_supports_thinking_config(model_name):
         kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
     return types.GenerateContentConfig(**kwargs)
+
+
+def google_genai_http_options() -> types.HttpOptions:
+    return types.HttpOptions(timeout=GENAI_TIMEOUT_SEC * 1000)
 
 
 def configure_runtime_logging() -> None:
@@ -85,6 +93,10 @@ def reload_settings() -> None:
     global FFMPEG_PATH
     global BLENDER_PATH
     global WHISPER_MODEL
+    global GENAI_TIMEOUT_SEC
+    global ANTHROPIC_TIMEOUT_SEC
+    global MANIM_PREVIEW_TIMEOUT_SEC
+    global MANIM_FINAL_TIMEOUT_SEC
 
     PROVIDER = os.getenv("PROVIDER", "gemini").strip().lower()
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -98,6 +110,10 @@ def reload_settings() -> None:
     FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
     BLENDER_PATH = os.getenv("BLENDER_PATH", "blender")
     WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
+    GENAI_TIMEOUT_SEC = max(15, int(os.getenv("GENAI_TIMEOUT_SEC", "90")))
+    ANTHROPIC_TIMEOUT_SEC = max(15.0, float(os.getenv("ANTHROPIC_TIMEOUT_SEC", "90")))
+    MANIM_PREVIEW_TIMEOUT_SEC = max(30, int(os.getenv("MANIM_PREVIEW_TIMEOUT_SEC", "75")))
+    MANIM_FINAL_TIMEOUT_SEC = max(MANIM_PREVIEW_TIMEOUT_SEC, int(os.getenv("MANIM_FINAL_TIMEOUT_SEC", "240")))
 
 
 def validate_config() -> None:

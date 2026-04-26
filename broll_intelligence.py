@@ -105,7 +105,10 @@ def call_reasoning_model(provider_name: str, model_name: str, system_prompt: str
     if provider_name == "claude":
         from anthropic import Anthropic
 
-        client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        client = Anthropic(
+            api_key=config.ANTHROPIC_API_KEY,
+            timeout=config.ANTHROPIC_TIMEOUT_SEC,
+        )
         response = client.messages.create(
             model=model_name or config.CLAUDE_MODEL,
             max_tokens=4096,
@@ -114,7 +117,10 @@ def call_reasoning_model(provider_name: str, model_name: str, system_prompt: str
         )
         return "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
 
-    client = genai.Client(api_key=config.GEMINI_API_KEY)
+    client = genai.Client(
+        api_key=config.GEMINI_API_KEY,
+        http_options=config.google_genai_http_options(),
+    )
     response = client.models.generate_content(
         model=model_name or config.GEMINI_MODEL,
         contents=user_prompt,

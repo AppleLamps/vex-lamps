@@ -442,6 +442,10 @@ def _preview_dimensions(width: int, height: int) -> tuple[int, int]:
     return preview_width, preview_height
 
 
+def _emit_render_progress(message: str) -> None:
+    print(f"[manim] {message}", flush=True)
+
+
 def _latex_runtime_ready(probe_root: Path) -> bool:
     global _LATEX_RUNTIME_READY_CACHE
     if _LATEX_RUNTIME_READY_CACHE is not None:
@@ -518,6 +522,8 @@ def _render_script(
     width: int,
     height: int,
     fps: float,
+    timeout_sec: int,
+    stage_label: str,
 ) -> Path:
     config_path = script_path.with_name(f"{output_file}.cfg")
     config_path.write_text(
@@ -547,7 +553,13 @@ def _render_script(
         str(script_path),
         scene_name,
     ]
-    result = subprocess.run(command, capture_output=True, text=True)
+    _emit_render_progress(f"{stage_label}: rendering {script_path.stem} at {width}x{height} {max(15, int(round(fps)))}fps")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout_sec)
+    except subprocess.TimeoutExpired as exc:
+        raise VisualRendererError(
+            f"Manim render timed out during {stage_label} after {timeout_sec}s for {script_path.stem}."
+        ) from exc
     if result.returncode != 0:
         stderr = (result.stderr or result.stdout or "").strip()
         if "No module named manim" in stderr:
@@ -669,6 +681,9 @@ def _example_limit_for_brief(brief) -> int:
 
 
 def _attempt_budget_for_brief(brief, spec: dict[str, Any]) -> int:
+    model_name = str(spec.get("generation_model") or "").strip().lower()
+    if model_name.startswith("gemma"):
+        return 1
     importance = float(spec.get("importance") or 0.0)
     template = str(spec.get("template") or "")
     if str(spec.get("composition_mode") or "") == "replace" and template in {"data_journey", "signal_network", "kinetic_route", "spotlight_compare", "interface_cascade", "ribbon_quote"}:
@@ -884,7 +899,11 @@ class ManimRenderer(VisualRenderer):
         for attempt_index in range(1, attempt_budget + 1):
             attempt_dir = attempts_root / f"attempt_{attempt_index:02d}"
             attempt_dir.mkdir(parents=True, exist_ok=True)
+            _emit_render_progress(
+                f"{spec.get('visual_id', 'visual')}: generation attempt {attempt_index}/{attempt_budget}"
+            )
             try:
+                _emit_render_progress(f"{spec.get('visual_id', 'visual')}: requesting scene code from {provider_name}/{model_name}")
                 candidate = request_scene_candidate(
                     provider_name,
                     model_name,
@@ -912,6 +931,9 @@ class ManimRenderer(VisualRenderer):
                 "validation": validation.to_dict(),
             }
             if not validation.valid:
+                _emit_render_progress(
+                    f"{spec.get('visual_id', 'visual')}: validation failed on attempt {attempt_index}"
+                )
                 attempts.append(attempt_record)
                 previous_code = candidate.scene_code
                 feedback_lines = _feedback_lines(validation.to_dict(), None)
@@ -933,6 +955,8 @@ class ManimRenderer(VisualRenderer):
                     width=preview_width,
                     height=preview_height,
                     fps=preview_fps,
+                    timeout_sec=config.MANIM_PREVIEW_TIMEOUT_SEC,
+                    stage_label=f"preview attempt {attempt_index}",
                 )
                 preview_metadata = probe_video(str(preview_video_path))
                 preview_frames = extract_preview_frames(
@@ -957,6 +981,9 @@ class ManimRenderer(VisualRenderer):
                 attempt_record["quality"] = quality.to_dict()
             except Exception as exc:
                 attempt_record["preview_error"] = str(exc)
+                _emit_render_progress(
+                    f"{spec.get('visual_id', 'visual')}: preview failed on attempt {attempt_index} - {exc}"
+                )
                 attempts.append(attempt_record)
                 previous_code = candidate.scene_code
                 feedback_lines = [f"Preview render failed: {exc}"]
@@ -966,6 +993,9 @@ class ManimRenderer(VisualRenderer):
             soft_accept = _can_soft_accept_quality(brief, validation, quality)
             attempt_record["quality_soft_accept"] = soft_accept
             if quality.passed or soft_accept:
+                _emit_render_progress(
+                    f"{spec.get('visual_id', 'visual')}: accepted attempt {attempt_index} with quality {quality.score:.3f}"
+                )
                 chosen_scene_source = scene_source
                 chosen_candidate = candidate
                 chosen_quality = {**quality.to_dict(), "soft_accept": soft_accept}
@@ -973,6 +1003,9 @@ class ManimRenderer(VisualRenderer):
 
             previous_code = candidate.scene_code
             feedback_lines = _feedback_lines(validation.to_dict(), quality.to_dict())
+            _emit_render_progress(
+                f"{spec.get('visual_id', 'visual')}: retrying after quality issues on attempt {attempt_index}"
+            )
 
         report_path = job_dir / "generation_report.json"
         fallback_used = chosen_scene_source is None
@@ -1004,6 +1037,7 @@ class ManimRenderer(VisualRenderer):
             "attempt_budget": attempt_budget,
         }
         if chosen_scene_source is None:
+            _emit_render_progress(f"{spec.get('visual_id', 'visual')}: generated path failed QA, falling back to legacy template")
             raise VisualRendererError(
                 "Generated Manim scene did not pass validation and preview QA. See generation_report.json for details."
             )
@@ -1042,8 +1076,10 @@ class ManimRenderer(VisualRenderer):
             cache_entry = _cache_entry(cache_root, cache_key)
             cached_asset = _load_cached_asset(cache_entry)
             if cached_asset is not None:
+                _emit_render_progress(f"{spec_id}: cache hit")
                 return cached_asset
         try:
+            _emit_render_progress(f"{spec_id}: preparing generated Manim scene")
             script_path, scene_metadata, artifact_paths = self._attempt_generated_scene(
                 spec,
                 job_dir=job_dir,
@@ -1061,6 +1097,7 @@ class ManimRenderer(VisualRenderer):
                 "template": str(spec.get("template") or ""),
                 "generation_failure": str(exc),
             }
+            _emit_render_progress(f"{spec_id}: using legacy template fallback - {exc}")
 
         media_dir = job_dir / "media"
         output_stem = scene_name if scene_name != "GeneratedScene" else f"GeneratedScene_{_safe_scene_name(spec_id)}"
@@ -1072,6 +1109,8 @@ class ManimRenderer(VisualRenderer):
             width=width,
             height=height,
             fps=fps,
+            timeout_sec=config.MANIM_FINAL_TIMEOUT_SEC,
+            stage_label="final render",
         )
         video_metadata = probe_video(str(asset_path))
         target_duration_sec = float(spec.get("duration") or 0.0)

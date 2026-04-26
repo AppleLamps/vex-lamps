@@ -11,7 +11,10 @@ from providers.base import BaseLLMProvider, LLMResponse, ToolCall
 
 class ClaudeProvider(BaseLLMProvider):
     def __init__(self) -> None:
-        self.client = Anthropic(api_key=config.ANTHROPIC_API_KEY)
+        self.client = Anthropic(
+            api_key=config.ANTHROPIC_API_KEY,
+            timeout=config.ANTHROPIC_TIMEOUT_SEC,
+        )
         self._model_name = config.CLAUDE_MODEL
 
     @property

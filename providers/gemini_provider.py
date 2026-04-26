@@ -12,7 +12,10 @@ from providers.base import BaseLLMProvider, LLMResponse, ToolCall
 
 class GeminiProvider(BaseLLMProvider):
     def __init__(self) -> None:
-        self._client = genai.Client(api_key=config.GEMINI_API_KEY)
+        self._client = genai.Client(
+            api_key=config.GEMINI_API_KEY,
+            http_options=config.google_genai_http_options(),
+        )
         self._model_name = config.GEMINI_MODEL
         self._tool_call_parts: dict[str, types.Part] = {}
 

@@ -51,6 +51,9 @@ ROLE_PRIORITIES = {
     "title": 85,
     "hero": 80,
     "chart": 75,
+    "structure": 75,
+    "system": 75,
+    "diagram": 75,
     "metric": 72,
     "quote": 70,
     "support": 64,
@@ -133,19 +136,31 @@ class VexGeneratedScene(MovingCameraScene):
     def theme_color(self, name: str, fallback: str | None = None) -> str:
         return str(self.theme.get(name) or fallback or THEME_DEFAULTS["text_primary"])
 
+    @property
+    def camera_frame(self):
+        return self.camera.frame
+
     def fit_text(
         self,
         text: str,
         *,
-        max_width: float,
-        max_font_size: int,
+        max_width: float | None = None,
+        max_font_size: int | None = None,
         min_font_size: int = 16,
         color: str | None = None,
         weight=BOLD,
         slant=NORMAL,
+        font_weight=None,
+        font_style=None,
     ) -> Text:
+        if font_weight is not None:
+            weight = font_weight
+        if font_style is not None:
+            slant = font_style
         cleaned = str(text or "").strip() or " "
-        for size in range(max_font_size, min_font_size - 1, -4):
+        resolved_max_width = float(max_width if max_width is not None else min(max(len(cleaned) * 0.28, 3.6), 10.0))
+        resolved_max_font_size = int(max_font_size if max_font_size is not None else 34)
+        for size in range(resolved_max_font_size, min_font_size - 1, -4):
             candidate = Text(
                 cleaned,
                 font_size=size,
@@ -153,7 +168,7 @@ class VexGeneratedScene(MovingCameraScene):
                 weight=weight,
                 slant=slant,
             )
-            if candidate.width <= max_width:
+            if candidate.width <= resolved_max_width:
                 return candidate
         return Text(
             cleaned,
@@ -165,11 +180,18 @@ class VexGeneratedScene(MovingCameraScene):
 
     def make_pill(
         self,
-        text: str,
+        text: str = "",
         *,
         fill: str | None = None,
         text_color: str | None = None,
         width: float | None = None,
+        height: float | None = None,
+        fill_opacity: float = 1.0,
+        stroke_color: str | None = None,
+        stroke_width: float = 0.0,
+        stroke_opacity: float = 0.0,
+        color: str | None = None,
+        **_: Any,
     ) -> VGroup:
         label = self.fit_text(
             str(text or "").upper(),
@@ -182,10 +204,15 @@ class VexGeneratedScene(MovingCameraScene):
         shell = RoundedRectangle(
             corner_radius=0.18,
             width=max(label.width + 0.44, width or 1.8),
-            height=max(label.height + 0.24, 0.52),
+            height=max(height or 0.0, label.height + 0.24, 0.52),
         )
-        shell.set_fill(ManimColor(fill or self.theme_color("eyebrow_fill")), opacity=1.0)
-        shell.set_stroke(width=0)
+        resolved_fill = fill or color or self.theme_color("eyebrow_fill")
+        shell.set_fill(ManimColor(resolved_fill), opacity=fill_opacity)
+        shell.set_stroke(
+            ManimColor(stroke_color or resolved_fill),
+            width=stroke_width,
+            opacity=stroke_opacity,
+        )
         label.move_to(shell.get_center())
         return VGroup(shell, label)
 
@@ -197,13 +224,22 @@ class VexGeneratedScene(MovingCameraScene):
         stroke: str | None = None,
         fill: str | None = None,
         radius: float = 0.22,
+        stroke_color: str | None = None,
+        fill_color: str | None = None,
+        fill_opacity: float = 0.95,
+        stroke_opacity: float = 0.95,
+        stroke_width: float = 2.4,
+        color: str | None = None,
+        **_: Any,
     ) -> VGroup:
         outer = RoundedRectangle(corner_radius=radius, width=width, height=height)
-        outer.set_fill(ManimColor(fill or self.theme_color("panel_fill")), opacity=0.95)
-        outer.set_stroke(ManimColor(stroke or self.theme_color("panel_stroke")), width=2.4, opacity=0.95)
+        resolved_fill = fill_color or fill or self.theme_color("panel_fill")
+        resolved_stroke = stroke_color or stroke or color or self.theme_color("panel_stroke")
+        outer.set_fill(ManimColor(resolved_fill), opacity=fill_opacity)
+        outer.set_stroke(ManimColor(resolved_stroke), width=stroke_width, opacity=stroke_opacity)
         inner = outer.copy()
         inner.scale(0.985)
-        inner.set_stroke(ManimColor(fill or self.theme_color("panel_fill")), width=1.2, opacity=0.4)
+        inner.set_stroke(ManimColor(resolved_fill), width=1.2, opacity=0.4)
         return VGroup(outer, inner)
 
     def make_title_block(
@@ -217,11 +253,14 @@ class VexGeneratedScene(MovingCameraScene):
         deck_color: str | None = None,
         eyebrow_fill: str | None = None,
         eyebrow_text_color: str | None = None,
+        title: str | None = None,
+        subtitle: str | None = None,
+        **_: Any,
     ) -> VGroup:
         header = VGroup()
         eyebrow_value = str(eyebrow or self.spec.get("eyebrow") or "").strip()
-        headline_value = str(headline or self.spec.get("headline") or "").strip()
-        deck_value = str(deck or self.spec.get("deck") or "").strip()
+        headline_value = str(headline or title or self.spec.get("headline") or "").strip()
+        deck_value = str(deck or subtitle or self.spec.get("deck") or "").strip()
         if eyebrow_value:
             header.add(
                 self.make_pill(
@@ -265,10 +304,23 @@ class VexGeneratedScene(MovingCameraScene):
             return VGroup(marker, header)
         return VGroup()
 
-    def make_signal_node(self, label: str, *, number: int | None = None, radius: float = 0.8) -> VGroup:
+    def make_signal_node(
+        self,
+        label: str = "",
+        *,
+        number: int | None = None,
+        radius: float = 0.8,
+        color: str | None = None,
+        fill_color: str | None = None,
+        stroke_color: str | None = None,
+        stroke_width: float = 3.0,
+        title: str | None = None,
+        **_: Any,
+    ) -> VGroup:
+        label = str(label or title or "").strip()
         circle = Circle(radius=radius)
-        circle.set_fill(ManimColor(self.theme_color("panel_fill")), opacity=1.0)
-        circle.set_stroke(ManimColor(self.theme_color("panel_stroke")), width=3)
+        circle.set_fill(ManimColor(fill_color or self.theme_color("panel_fill")), opacity=1.0)
+        circle.set_stroke(ManimColor(stroke_color or color or self.theme_color("panel_stroke")), width=stroke_width)
         halo = circle.copy().scale(1.18).set_stroke(ManimColor(self.theme_color("glow")), width=2, opacity=0.18).set_fill(opacity=0)
         parts = [halo, circle]
         if number is not None:
@@ -280,7 +332,23 @@ class VexGeneratedScene(MovingCameraScene):
         parts.append(text)
         return VGroup(*parts)
 
-    def make_connector(self, left: Any, right: Any, *, curved: bool = True, color: str | None = None):
+    def make_connector(
+        self,
+        left: Any = None,
+        right: Any = None,
+        *,
+        curved: bool = True,
+        color: str | None = None,
+        start: Any = None,
+        end: Any = None,
+        source: Any = None,
+        target: Any = None,
+        **_: Any,
+    ):
+        left = left if left is not None else start if start is not None else source
+        right = right if right is not None else end if end is not None else target
+        if left is None or right is None:
+            raise ValueError("make_connector requires two endpoints.")
         if curved:
             return CurvedArrow(
                 left.get_right() + RIGHT * 0.12,
@@ -303,6 +371,7 @@ class VexGeneratedScene(MovingCameraScene):
         color: str | None = None,
         glow_scale: float = 2.4,
         glow_opacity: float = 0.18,
+        **_: Any,
     ) -> VGroup:
         tone = ManimColor(color or self.theme_color("accent"))
         glow = Circle(radius=radius * glow_scale).set_fill(tone, opacity=glow_opacity).set_stroke(width=0)
@@ -318,6 +387,7 @@ class VexGeneratedScene(MovingCameraScene):
         opacity: float = 0.34,
         arc_angle: float | None = None,
         start_angle: float = 0.0,
+        **_: Any,
     ):
         tone = ManimColor(color or self.theme_color("accent_secondary"))
         if arc_angle is not None:
@@ -330,15 +400,30 @@ class VexGeneratedScene(MovingCameraScene):
 
     def make_route_path(
         self,
-        start: Any,
-        end: Any,
+        start: Any = None,
+        end: Any = None,
         *,
         angle: float = -0.35,
         color: str | None = None,
         dashed: bool = False,
         stroke_width: float = 4.0,
+        bend: float | None = None,
+        curvature: float | None = None,
+        start_point: Any = None,
+        end_point: Any = None,
+        from_point: Any = None,
+        to_point: Any = None,
+        **_: Any,
     ):
+        start = start if start is not None else start_point if start_point is not None else from_point
+        end = end if end is not None else end_point if end_point is not None else to_point
+        if start is None or end is None:
+            raise ValueError("make_route_path requires start and end points.")
         tone = ManimColor(color or self.theme_color("accent_secondary"))
+        if bend is not None:
+            angle = bend
+        if curvature is not None:
+            angle = curvature
         if angle:
             path = ArcBetweenPoints(start, end, angle=angle)
             path.set_stroke(tone, width=stroke_width, opacity=0.92)
@@ -356,6 +441,8 @@ class VexGeneratedScene(MovingCameraScene):
         color: str | None = None,
         opacity: float = 0.14,
         angle: float = -0.28,
+        center: Any | None = None,
+        **_: Any,
     ) -> Rectangle:
         resolved_width = float(width if width is not None else length if length is not None else 4.8)
         resolved_height = float(height if height is not None else 0.42)
@@ -363,6 +450,8 @@ class VexGeneratedScene(MovingCameraScene):
         beam.set_fill(ManimColor(color or self.theme_color("glow")), opacity=opacity)
         beam.set_stroke(width=0)
         beam.rotate(angle)
+        if center is not None:
+            beam.move_to(center)
         return beam
 
     def make_metric_badge(
@@ -373,6 +462,7 @@ class VexGeneratedScene(MovingCameraScene):
         fill: str | None = None,
         text_color: str | None = None,
         color: str | None = None,
+        **kwargs: Any,
     ) -> VGroup:
         resolved_fill = fill or color or self.theme_color("accent")
         shell = self.make_pill(
@@ -380,6 +470,7 @@ class VexGeneratedScene(MovingCameraScene):
             fill=resolved_fill,
             text_color=text_color or self.theme_color("background"),
             width=width,
+            **kwargs,
         )
         halo = shell[0].copy().scale(1.18).set_fill(opacity=0).set_stroke(
             ManimColor(resolved_fill),
@@ -396,6 +487,7 @@ class VexGeneratedScene(MovingCameraScene):
         accent: str | None = None,
         text_color: str | None = None,
         color: str | None = None,
+        **_: Any,
     ) -> VGroup:
         resolved_accent = accent or color or self.theme_color("accent")
         line = Line(LEFT * 1.6, RIGHT * 1.6, color=ManimColor(resolved_accent), stroke_width=5)
@@ -463,8 +555,31 @@ class VexGeneratedScene(MovingCameraScene):
         mob.add_updater(updater)
         return mob
 
-    def camera_focus(self, target: Any, *, scale: float = 0.92, run_time: float = 0.7) -> Animation:
-        return self.camera.frame.animate.scale(scale).move_to(target).set_run_time(run_time)
+    def camera_focus(
+        self,
+        target: Any,
+        *,
+        scale: float = 0.92,
+        run_time: float = 0.7,
+        zoom: float | None = None,
+        duration: float | None = None,
+        center: Any | None = None,
+        **_: Any,
+    ) -> Animation:
+        if zoom is not None:
+            try:
+                zoom_value = float(zoom)
+                if zoom_value > 0.01:
+                    scale = 1.0 / zoom_value
+            except (TypeError, ValueError):
+                pass
+        if duration is not None:
+            try:
+                run_time = float(duration)
+            except (TypeError, ValueError):
+                pass
+        focus_target = center if center is not None else target
+        return self.camera.frame.animate.scale(scale).move_to(focus_target).set_run_time(run_time)
 
     def stagger_fade_in(self, items: list[Any], *, shift=UP * 0.12, lag_ratio: float = 0.12) -> Animation:
         from manim import LaggedStart
@@ -610,9 +725,18 @@ class VexGeneratedScene(MovingCameraScene):
         return ""
 
     def _font_size(self, mob: Any) -> float | None:
-        font_size = getattr(mob, "font_size", None)
+        try:
+            font_size = getattr(mob, "font_size", None)
+        except Exception:
+            font_size = None
         if isinstance(font_size, (int, float)):
-            return float(font_size)
+            try:
+                value = float(font_size)
+            except (TypeError, ValueError):
+                value = None
+            else:
+                if math.isfinite(value) and value > 0.0:
+                    return value
         sizes = [self._font_size(child) for child in getattr(mob, "submobjects", [])]
         sizes = [value for value in sizes if value is not None]
         return max(sizes) if sizes else None
@@ -693,7 +817,7 @@ class VexGeneratedScene(MovingCameraScene):
 
     def _anchor_layout_roles(self, entries: list[dict[str, Any]], *, safe_bounds: dict[str, float], frame_bounds: dict[str, float]) -> None:
         titles = [entry for entry in entries if str(entry.get("role") or "") == "title"]
-        charts = [entry for entry in entries if str(entry.get("role") or "") == "chart"]
+        charts = [entry for entry in entries if str(entry.get("role") or "") in {"chart", "structure", "system", "diagram"}]
         metrics = [entry for entry in entries if str(entry.get("role") or "") == "metric"]
         supports = [entry for entry in entries if str(entry.get("role") or "") in {"support", "footer", "quote"}]
 
@@ -822,21 +946,38 @@ class VexGeneratedScene(MovingCameraScene):
             mover, anchor = anchor, mover
         mover_box = self._bbox(mover["mob"])
         anchor_box = self._bbox(anchor["mob"])
-        dx = 0.0
-        dy = 0.0
         padding = 0.18
-        move_horizontal = overlap_x < overlap_y
-        if move_horizontal:
-            direction = 1.0 if mover_box["center_x"] >= anchor_box["center_x"] else -1.0
-            dx = direction * (overlap_x + padding)
-        else:
-            direction = 1.0 if mover_box["center_y"] >= anchor_box["center_y"] else -1.0
-            dy = direction * (overlap_y + padding)
-        mover["mob"].shift(RIGHT * dx + UP * dy)
-        if mover.get("allow_scale_down") and (abs(dx) > 0.6 or abs(dy) > 0.6):
-            mover["mob"].scale(0.96)
-            self._record_guardrail_action("scale_after_overlap", mover["name"], factor=0.96)
-        self._clamp_inside_bounds(mover, safe_bounds=safe_bounds, frame_bounds=frame_bounds)
+        original_center = mover["mob"].get_center().copy()
+
+        def apply_shift(horizontal: bool) -> tuple[float, float]:
+            local_dx = 0.0
+            local_dy = 0.0
+            if horizontal:
+                direction = 1.0 if mover_box["center_x"] >= anchor_box["center_x"] else -1.0
+                local_dx = direction * (overlap_x + padding)
+            else:
+                direction = 1.0 if mover_box["center_y"] >= anchor_box["center_y"] else -1.0
+                local_dy = direction * (overlap_y + padding)
+            mover["mob"].shift(RIGHT * local_dx + UP * local_dy)
+            if mover.get("allow_scale_down") and (abs(local_dx) > 0.6 or abs(local_dy) > 0.6):
+                mover["mob"].scale(0.96)
+                self._record_guardrail_action("scale_after_overlap", mover["name"], factor=0.96)
+            self._clamp_inside_bounds(mover, safe_bounds=safe_bounds, frame_bounds=frame_bounds)
+            return local_dx, local_dy
+
+        def still_overlapping() -> bool:
+            new_first_box = self._bbox(first["mob"])
+            new_second_box = self._bbox(second["mob"])
+            return (
+                max(0.0, min(new_first_box["right"], new_second_box["right"]) - max(new_first_box["left"], new_second_box["left"])) > 0.0
+                and max(0.0, min(new_first_box["top"], new_second_box["top"]) - max(new_first_box["bottom"], new_second_box["bottom"])) > 0.0
+            )
+
+        preferred_horizontal = overlap_x < overlap_y
+        dx, dy = apply_shift(preferred_horizontal)
+        if still_overlapping():
+            mover["mob"].move_to(original_center)
+            dx, dy = apply_shift(not preferred_horizontal)
         self._record_guardrail_action("resolve_overlap", mover["name"], against=anchor["name"], dx=round(dx, 4), dy=round(dy, 4))
         return True
 

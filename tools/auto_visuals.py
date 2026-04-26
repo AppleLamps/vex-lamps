@@ -22,6 +22,10 @@ from visual_intelligence import (
 )
 
 
+def _emit_progress(message: str) -> None:
+    print(f"[auto_visuals] {message}", flush=True)
+
+
 def _ensure_transcript_bundle(state: ProjectState) -> dict[str, object]:
     transcript_bundle = load_transcript_bundle(state.working_dir)
     if transcript_bundle.get("segments"):
@@ -197,6 +201,7 @@ def execute(params: dict, state: ProjectState) -> dict:
         return _delegate_stock_fallback(params, state, "Auto visuals was asked to use stock-only mode.")
 
     try:
+        _emit_progress("Loading transcript bundle...")
         transcript_bundle = _ensure_transcript_bundle(state)
         metadata = state.metadata or probe_video(state.working_file)
         clip_duration = float(metadata.get("duration_sec") or 0.0)
@@ -210,7 +215,9 @@ def execute(params: dict, state: ProjectState) -> dict:
         transcript_words = list(transcript_bundle.get("words") or [])
         sentence_segments = list(transcript_bundle.get("sentences") or [])
         blocked_ranges = state.replace_overlay_ranges()
+        _emit_progress("Detecting safe scene cuts...")
         scene_cuts = detect_scene_cuts(state.working_file)
+        _emit_progress("Building visual candidate cards from the transcript...")
         cards = build_visual_context_cards(
             sentence_segments,
             transcript_segments,
@@ -246,6 +253,7 @@ def execute(params: dict, state: ProjectState) -> dict:
         plan = _load_cached_plan(plan_cache_root, plan_cache_key)
         plan_cache_hit = plan is not None
         if plan is None:
+            _emit_progress("Planning the generated visual beats...")
             plan = analyze_visual_plan_with_llm(
                 provider_name=provider_name,
                 model_name=model_name,
@@ -264,6 +272,8 @@ def execute(params: dict, state: ProjectState) -> dict:
             )
             if plan:
                 _store_cached_plan(plan_cache_root, plan_cache_key, plan)
+        else:
+            _emit_progress("Using cached visual plan.")
         if not plan:
             return {
                 "success": False,
@@ -292,9 +302,13 @@ def execute(params: dict, state: ProjectState) -> dict:
         ]
         render_results: list[tuple[int, dict[str, object], object, str] | tuple[int, str]] = []
         worker_count = _max_render_workers(params, len(prepared_specs))
+        _emit_progress(
+            f"Rendering {len(prepared_specs)} generated visual{'s' if len(prepared_specs) != 1 else ''} with {worker_count} worker{'s' if worker_count != 1 else ''}..."
+        )
         if worker_count == 1:
             for index, spec in enumerate(prepared_specs):
                 try:
+                    _emit_progress(f"Rendering {spec.get('visual_id', f'visual_{index + 1:03d}')}...")
                     asset, selection_reason = _render_generated_visual(
                         spec,
                         preferred_renderer=renderer_name,
@@ -305,6 +319,9 @@ def execute(params: dict, state: ProjectState) -> dict:
                     )
                     render_results.append((index, spec, asset, selection_reason))
                 except VisualRendererError as exc:
+                    _emit_progress(
+                        f"Render failed for {spec.get('visual_id', f'visual_{index + 1:03d}')}: {exc}"
+                    )
                     render_results.append((index, str(exc)))
         else:
             with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="vex-auto-visuals") as executor:
@@ -324,8 +341,14 @@ def execute(params: dict, state: ProjectState) -> dict:
                     index, spec = future_map[future]
                     try:
                         asset, selection_reason = future.result()
+                        _emit_progress(
+                            f"Rendered {spec.get('visual_id', f'visual_{index + 1:03d}')} with {asset.renderer}."
+                        )
                         render_results.append((index, spec, asset, selection_reason))
                     except VisualRendererError as exc:
+                        _emit_progress(
+                            f"Render failed for {spec.get('visual_id', f'visual_{index + 1:03d}')}: {exc}"
+                        )
                         render_results.append((index, str(exc)))
 
         for result in sorted(render_results, key=lambda item: item[0]):
@@ -395,6 +418,7 @@ def execute(params: dict, state: ProjectState) -> dict:
                 "tool_name": "add_auto_visuals",
             }
 
+        _emit_progress("Compositing the generated visuals back into the working cut...")
         output_path = apply_visual_overlays(state.working_file, state.working_dir, applied_overlays)
         state.working_file = output_path
         state.metadata = probe_video(output_path)
@@ -481,6 +505,7 @@ def execute(params: dict, state: ProjectState) -> dict:
                 "description": f"Added {len(applied_overlays)} transcript-aligned generated visuals ({renderer_summary})",
             }
         )
+        _emit_progress("Auto visuals complete.")
         return {
             "success": True,
             "message": (

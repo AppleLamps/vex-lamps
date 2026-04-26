@@ -79,6 +79,15 @@ RATE_FUNCTION_NAMES = {
 }
 
 
+def _call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        left = _call_name(node.value)
+        return f"{left}.{node.attr}" if left else node.attr
+    return ""
+
+
 def _examples_block(examples: list[SceneExample]) -> str:
     if not examples:
         return "No retrieval examples were found."
@@ -190,6 +199,17 @@ def _repair_scene_code(scene_code: str) -> str:
             self.generic_visit(node)
             if isinstance(node.func, ast.Name) and node.func.id in RUNTIME_HELPER_NAMES:
                 node.func = ast.Attribute(value=ast.Name(id="self", ctx=ast.Load()), attr=node.func.id, ctx=ast.Load())
+            call_name = _call_name(node.func)
+            short_name = call_name.split(".")[-1]
+            for keyword in node.keywords:
+                if keyword.arg == "font_weight":
+                    keyword.arg = "weight"
+                elif keyword.arg == "font_style":
+                    keyword.arg = "slant"
+            if short_name == "make_pill":
+                has_text = bool(node.args) or any(keyword.arg == "text" for keyword in node.keywords)
+                if not has_text:
+                    node.args.insert(0, ast.Constant(value=""))
             return node
 
         def visit_Name(self, node: ast.Name) -> ast.AST:
