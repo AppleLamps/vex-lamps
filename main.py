@@ -35,6 +35,7 @@ VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".m4v", ".flv"}
 
 
 def initialize_runtime() -> None:
+    config.configure_runtime_logging()
     config.validate_config()
 
 
@@ -412,7 +413,7 @@ def clip_live_text(output: Text, *, max_lines: int = 10, max_chars: int = 1600) 
 
 
 def render_trace_summary(trace_events: list[TraceEvent]) -> Table:
-    summary = Table.grid(expand=True, padding=(0, 2))
+    summary = Table.grid(expand=True, padding=(0, 1))
     summary.add_column(ratio=1)
     summary.add_column(justify="right")
     if not trace_events:
@@ -441,28 +442,26 @@ def render_trace_summary(trace_events: list[TraceEvent]) -> Table:
 
 
 def render_live_agent_view(output: Text, trace_events: list[TraceEvent], tool_logs: LiveLogBuffer):
-    panels: list[Panel] = [
-        Panel(render_trace_summary(trace_events), title="Vex Live", border_style="cyan"),
-        Panel(render_trace_table(trace_events, max_items=8), title="Agent Trace", border_style="magenta"),
-    ]
     tool_lines = tool_logs.snapshot()
-    if tool_lines:
-        panels.append(
-            Panel(
-                Text("\n".join(tool_lines), style="dim"),
-                title="Tool Output",
-                border_style="blue",
-            )
-        )
-    if output.plain.strip():
-        panels.append(
-            Panel(
-                clip_live_text(output),
-                title="Assistant",
-                border_style="green",
-            )
-        )
-    return Group(*panels)
+    sections: list[object] = [
+        render_trace_summary(trace_events),
+        Text(""),
+        Text("Trace", style="bold magenta"),
+        render_trace_table(trace_events, max_items=8),
+        Text(""),
+        Text("Tool Output", style="bold blue"),
+        Text("\n".join(tool_lines), style="dim") if tool_lines else Text("Waiting for tool activity...", style="dim"),
+        Text(""),
+        Text("Assistant", style="bold green"),
+        clip_live_text(output),
+    ]
+    return Panel(
+        Group(*sections),
+        title="Vex Live",
+        border_style="cyan",
+        box=box.ROUNDED,
+        padding=(0, 1),
+    )
 
 
 def run_agent_with_live_trace(agent: VideoAgent, command: str):
@@ -476,6 +475,7 @@ def run_agent_with_live_trace(agent: VideoAgent, command: str):
         console=console,
         refresh_per_second=10,
         transient=True,
+        vertical_overflow="crop",
     ) as live:
         def refresh_live() -> None:
             nonlocal last_refresh

@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from rich import box
 from rich.table import Table
 from rich.text import Text
 
@@ -101,7 +102,14 @@ class TraceRecorder:
 
 
 def render_trace_table(events: list[TraceEvent], max_items: int = 10):
-    table = Table.grid(expand=True, padding=(0, 1))
+    table = Table(
+        box=box.SIMPLE,
+        show_header=False,
+        show_edge=False,
+        pad_edge=False,
+        collapse_padding=True,
+        expand=True,
+    )
     table.add_column(style="dim", width=4, no_wrap=True)
     table.add_column(width=8, no_wrap=True)
     table.add_column(ratio=1)
@@ -110,7 +118,7 @@ def render_trace_table(events: list[TraceEvent], max_items: int = 10):
         return table
 
     for event in events[-max_items:]:
-        status_text = Text(event.status.upper(), style=trace_status_style(event.status))
+        status_text = Text(event.status.upper(), style=f"bold {trace_status_style(event.status)}")
         message = Text(event.title, style="bold")
         if event.detail:
             message.append(f" - {event.detail}", style="dim")

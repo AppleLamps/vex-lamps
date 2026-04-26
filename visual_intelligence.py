@@ -181,7 +181,7 @@ FILLER_LEAD_WORDS = {
 }
 TRAILING_TRIM_WORDS = {"with", "by", "to", "for", "and", "or", "of", "in", "on", "a", "an", "the", "then", "next", "finally"}
 BACKGROUND_MOTIFS = ("grid", "rings", "beams", "constellation", "bands")
-PLAN_CACHE_VERSION = "2026-04-26-v2"
+PLAN_CACHE_VERSION = "2026-04-26-v3"
 LAYOUT_VARIANTS = {
     "data_journey": "arc_stage",
     "signal_network": "network_sweep",

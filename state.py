@@ -39,9 +39,10 @@ def clip_time_range_to_available_window(
     *,
     min_duration_sec: float = 0.0,
 ) -> tuple[float, float] | None:
+    epsilon = 1e-6
     start_value = float(start_sec)
     end_value = float(end_sec)
-    if end_value <= start_value:
+    if end_value <= start_value + epsilon:
         return None
     available: list[tuple[float, float]] = [(start_value, end_value)]
     for blocked_start, blocked_end in merge_time_ranges(blocked_ranges):
@@ -60,7 +61,7 @@ def clip_time_range_to_available_window(
     viable = [
         (candidate_start, candidate_end)
         for candidate_start, candidate_end in available
-        if candidate_end - candidate_start >= min_duration_sec
+        if candidate_end - candidate_start + epsilon >= min_duration_sec
     ]
     if not viable:
         return None

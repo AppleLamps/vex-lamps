@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import sys
@@ -40,6 +41,20 @@ def build_gemini_generation_config(
     if gemini_supports_thinking_config(model_name):
         kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
     return types.GenerateContentConfig(**kwargs)
+
+
+def configure_runtime_logging() -> None:
+    noisy_loggers = (
+        "google",
+        "google.genai",
+        "google.genai.models",
+        "google.genai._api_client",
+        "httpx",
+        "httpcore",
+        "urllib3",
+    )
+    for logger_name in noisy_loggers:
+        logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 
 def _print_and_exit(message: str) -> None:

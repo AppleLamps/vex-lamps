@@ -131,7 +131,7 @@ def _load_cached_plan(cache_root: Path, cache_key: str) -> list[dict[str, object
     except (OSError, json.JSONDecodeError):
         return None
     plan = payload.get("plan")
-    if isinstance(plan, list):
+    if isinstance(plan, list) and plan:
         return plan
     return None
 
@@ -262,7 +262,16 @@ def execute(params: dict, state: ProjectState) -> dict:
                 blocked_ranges,
                 min_duration_sec=min_visual_sec,
             )
-            _store_cached_plan(plan_cache_root, plan_cache_key, plan)
+            if plan:
+                _store_cached_plan(plan_cache_root, plan_cache_key, plan)
+        if not plan:
+            return {
+                "success": False,
+                "message": "No clear generated-visual windows were available after respecting the visuals already on this project timeline.",
+                "suggestion": None,
+                "updated_state": state,
+                "tool_name": "add_auto_visuals",
+            }
         timestamp_label = utc_now_iso().replace(":", "-").replace("+00:00", "Z")
         bundle_dir = bundle_root / f"{safe_stem(state.project_name)}_auto_visuals_{timestamp_label}"
         bundle_dir.mkdir(parents=True, exist_ok=True)
