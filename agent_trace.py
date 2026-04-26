@@ -19,6 +19,15 @@ def truncate_trace_text(text: str, limit: int = 140) -> str:
     return collapsed[: limit - 3].rstrip() + "..."
 
 
+def trace_status_style(status: str) -> str:
+    return {
+        "running": "yellow",
+        "success": "green",
+        "error": "red",
+        "info": "cyan",
+    }.get(str(status or "").strip().lower(), "white")
+
+
 @dataclass
 class TraceEvent:
     step: int
@@ -97,20 +106,13 @@ def render_trace_table(events: list[TraceEvent], max_items: int = 10):
     table.add_column(width=8, no_wrap=True)
     table.add_column(ratio=1)
     if not events:
-        table.add_row("-", "idle", "Waiting for agent activity...")
+        table.add_row("-", "IDLE", Text("Preparing agent activity...", style="dim"))
         return table
 
-    status_styles = {
-        "running": "yellow",
-        "success": "green",
-        "error": "red",
-        "info": "cyan",
-    }
-    visible = events[-max_items:]
-    for event in visible:
-        status_text = Text(event.status.upper(), style=status_styles.get(event.status, "white"))
+    for event in events[-max_items:]:
+        status_text = Text(event.status.upper(), style=trace_status_style(event.status))
         message = Text(event.title, style="bold")
         if event.detail:
-            message.append(f" — {event.detail}", style="dim")
+            message.append(f" - {event.detail}", style="dim")
         table.add_row(str(event.step), status_text, message)
     return table

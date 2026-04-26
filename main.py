@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
+import time
 import uuid
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
 import typer
-from agent_trace import TraceEvent, render_trace_table
+from agent_trace import TraceEvent, render_trace_table, trace_status_style
 from rich import box
 from rich.console import Console, Group
 from rich.live import Live
@@ -306,19 +309,188 @@ def render_trace_history(state: ProjectState) -> None:
     console.print(Panel(body, title="Latest Agent Trace", border_style="magenta"))
 
 
-def render_live_agent_view(output: Text, trace_events: list[TraceEvent]):
-    output_panel = Panel(output or Text(" "), title="Vex", border_style="cyan")
-    trace_panel = Panel(render_trace_table(trace_events, max_items=8), title="Agent Trace", border_style="magenta")
-    return Group(output_panel, trace_panel)
+ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
+PROGRESS_HINT_RE = re.compile(r"(%\||frames/s|it/s|\bETA\b|\b\d+/\d+\b)", re.IGNORECASE)
+
+
+class LiveLogBuffer:
+    def __init__(
+        self,
+        *,
+        max_lines: int = 6,
+        max_line_length: int = 160,
+        on_update=None,
+    ) -> None:
+        self.max_lines = max_lines
+        self.max_line_length = max_line_length
+        self.on_update = on_update
+        self._lines: deque[str] = deque(maxlen=max_lines)
+        self._current = ""
+
+    def _normalize(self, value: str) -> str:
+        cleaned = ANSI_ESCAPE_RE.sub("", str(value or ""))
+        cleaned = " ".join(cleaned.replace("\t", " ").split()).strip()
+        if len(cleaned) > self.max_line_length:
+            cleaned = cleaned[: self.max_line_length - 3].rstrip() + "..."
+        return cleaned
+
+    def _push_line(self, value: str, *, replace_last: bool) -> bool:
+        line = self._normalize(value)
+        if not line:
+            return False
+        if replace_last and self._lines:
+            if self._lines[-1] != line:
+                self._lines[-1] = line
+                return True
+            return False
+        elif not self._lines or self._lines[-1] != line:
+            self._lines.append(line)
+            return True
+        return False
+
+    def write(self, text: str) -> int:
+        if not text:
+            return 0
+        changed = False
+        cleaned = ANSI_ESCAPE_RE.sub("", str(text)).replace("\r\n", "\n")
+        for part in re.split(r"(\r|\n)", cleaned):
+            if not part:
+                continue
+            if part == "\r":
+                if self._current.strip():
+                    changed = self._push_line(self._current, replace_last=True) or changed
+                self._current = ""
+                continue
+            if part == "\n":
+                if self._current.strip():
+                    changed = (
+                        self._push_line(self._current, replace_last=bool(PROGRESS_HINT_RE.search(self._current)))
+                        or changed
+                    )
+                self._current = ""
+                continue
+            self._current += part
+            if PROGRESS_HINT_RE.search(self._current):
+                changed = self._push_line(self._current, replace_last=True) or changed
+                self._current = ""
+        if changed and self.on_update is not None:
+            self.on_update()
+        return len(text)
+
+    def flush(self, *, notify: bool = True) -> None:
+        if self._current.strip():
+            changed = self._push_line(self._current, replace_last=bool(PROGRESS_HINT_RE.search(self._current)))
+            self._current = ""
+            if notify and changed and self.on_update is not None:
+                self.on_update()
+
+    def isatty(self) -> bool:
+        return False
+
+    @property
+    def encoding(self) -> str:
+        return "utf-8"
+
+    def snapshot(self) -> list[str]:
+        self.flush(notify=False)
+        return list(self._lines)
+
+    def has_content(self) -> bool:
+        return bool(self.snapshot())
+
+
+def clip_live_text(output: Text, *, max_lines: int = 10, max_chars: int = 1600) -> Text:
+    plain = output.plain.strip()
+    if not plain:
+        return Text("Waiting for assistant response...", style="dim")
+    if len(plain) > max_chars:
+        plain = plain[-max_chars:]
+    lines = plain.splitlines()
+    if len(lines) > max_lines:
+        lines = ["..."] + lines[-max_lines:]
+    return Text("\n".join(lines))
+
+
+def render_trace_summary(trace_events: list[TraceEvent]) -> Table:
+    summary = Table.grid(expand=True, padding=(0, 2))
+    summary.add_column(ratio=1)
+    summary.add_column(justify="right")
+    if not trace_events:
+        summary.add_row(
+            Text("Preparing agent...", style="bold cyan"),
+            Text("No steps yet", style="dim"),
+        )
+        return summary
+    last_event = trace_events[-1]
+    completed = sum(1 for event in trace_events if event.status == "success")
+    running = sum(1 for event in trace_events if event.status == "running")
+    failed = sum(1 for event in trace_events if event.status == "error")
+    title = Text(last_event.title, style=f"bold {trace_status_style(last_event.status)}")
+    if last_event.detail:
+        title.append(f" - {last_event.detail}", style="dim")
+    stats = Text()
+    stats.append(f"{len(trace_events)} steps", style="cyan")
+    if running:
+        stats.append(f"  |  {running} running", style="yellow")
+    if completed:
+        stats.append(f"  |  {completed} done", style="green")
+    if failed:
+        stats.append(f"  |  {failed} issue", style="red")
+    summary.add_row(title, stats)
+    return summary
+
+
+def render_live_agent_view(output: Text, trace_events: list[TraceEvent], tool_logs: LiveLogBuffer):
+    panels: list[Panel] = [
+        Panel(render_trace_summary(trace_events), title="Vex Live", border_style="cyan"),
+        Panel(render_trace_table(trace_events, max_items=8), title="Agent Trace", border_style="magenta"),
+    ]
+    tool_lines = tool_logs.snapshot()
+    if tool_lines:
+        panels.append(
+            Panel(
+                Text("\n".join(tool_lines), style="dim"),
+                title="Tool Output",
+                border_style="blue",
+            )
+        )
+    if output.plain.strip():
+        panels.append(
+            Panel(
+                clip_live_text(output),
+                title="Assistant",
+                border_style="green",
+            )
+        )
+    return Group(*panels)
 
 
 def run_agent_with_live_trace(agent: VideoAgent, command: str):
     output = Text()
     trace_events: list[TraceEvent] = []
+    last_refresh = 0.0
+    tool_logs = LiveLogBuffer()
 
-    with Live(render_live_agent_view(output, trace_events), console=console, refresh_per_second=8) as live:
+    with Live(
+        render_live_agent_view(output, trace_events, tool_logs),
+        console=console,
+        refresh_per_second=10,
+        transient=True,
+    ) as live:
         def refresh_live() -> None:
-            live.update(render_live_agent_view(output, trace_events))
+            nonlocal last_refresh
+            now = time.monotonic()
+            if now - last_refresh < 0.08:
+                return
+            last_refresh = now
+            live.update(render_live_agent_view(output, trace_events, tool_logs))
+
+        def force_refresh_live() -> None:
+            nonlocal last_refresh
+            last_refresh = time.monotonic()
+            live.update(render_live_agent_view(output, trace_events, tool_logs))
+
+        tool_logs.on_update = refresh_live
 
         def stream_callback(chunk: str) -> None:
             output.append(chunk)
@@ -326,13 +498,15 @@ def run_agent_with_live_trace(agent: VideoAgent, command: str):
 
         def trace_callback(event: TraceEvent) -> None:
             trace_events.append(event)
-            refresh_live()
+            force_refresh_live()
 
-        response = agent.run(
-            command,
-            stream_callback=stream_callback,
-            trace_callback=trace_callback,
-        )
+        with contextlib.redirect_stdout(tool_logs), contextlib.redirect_stderr(tool_logs):
+            response = agent.run(
+                command,
+                stream_callback=stream_callback,
+                trace_callback=trace_callback,
+            )
+        force_refresh_live()
     return response, trace_events
 
 
