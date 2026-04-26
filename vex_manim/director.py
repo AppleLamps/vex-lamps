@@ -8,6 +8,7 @@ from typing import Any
 from broll_intelligence import call_reasoning_model, extract_json_object, truncate
 from vex_manim.briefs import SceneBrief
 from vex_manim.scene_library import SceneExample
+from vex_manim.skill_pack import SkillSlice, retrieve_skill_slices
 
 
 @dataclass
@@ -31,6 +32,12 @@ def _brief_block(brief: SceneBrief) -> str:
     return json.dumps(payload, indent=2)
 
 
+def _skills_block(skills: list[SkillSlice]) -> str:
+    if not skills:
+        return "No additional skill slices were selected."
+    return "\n\n".join(skill.to_prompt_block() for skill in skills)
+
+
 def _system_prompt() -> str:
     return (
         "You are a principal motion designer and senior Manim engineer writing production-quality animation code. "
@@ -40,13 +47,14 @@ def _system_prompt() -> str:
         "scene_code must define exactly one class named GeneratedScene that subclasses VexGeneratedScene. "
         "Use real Manim constructs and keep the code self-contained. "
         "Forbidden: filesystem access, network access, subprocess calls, os/sys/pathlib/shutil usage, eval/exec/open, or any code outside of animation needs. "
-        "Assume SCENE_SPEC and SCENE_BRIEF globals exist, and that VexGeneratedScene already provides themed helpers like apply_house_background, make_title_block, make_pill, make_glass_panel, make_signal_node, make_connector, fit_text, and camera_focus."
+        "Assume SCENE_SPEC and SCENE_BRIEF globals exist, and that VexGeneratedScene already provides themed helpers like apply_house_background, make_title_block, make_pill, make_glass_panel, make_signal_node, make_connector, fit_text, camera_focus, and register_layout_group."
     )
 
 
 def _user_prompt(
     brief: SceneBrief,
     examples: list[SceneExample],
+    skills: list[SkillSlice],
     *,
     previous_code: str | None = None,
     feedback_lines: list[str] | None = None,
@@ -67,11 +75,15 @@ def _user_prompt(
     return (
         "Scene brief:\n"
         f"{_brief_block(brief)}\n\n"
+        "Relevant Manim skill slices:\n"
+        f"{_skills_block(skills)}\n\n"
         "Retrieved scene examples:\n"
         f"{_examples_block(examples)}\n\n"
         "Hard requirements:\n"
         "- Start from VexGeneratedScene and build a real animated scene.\n"
         "- Add the title treatment with make_title_block unless the scene has a stronger editorial framing.\n"
+        "- Register the principal visible groups with register_layout_group(name, group, role=...) so runtime layout guardrails can keep the scene clean.\n"
+        "- Register at least a title/hero group and one or two supporting groups whenever they exist.\n"
         "- Keep the pacing within the target duration.\n"
         "- Use at least two advanced Manim techniques when the brief intensity is medium or high.\n"
         "- Avoid plain repeated cards or transcript parroting.\n"
@@ -99,6 +111,7 @@ def request_scene_candidate(
     previous_code: str | None = None,
     feedback_lines: list[str] | None = None,
 ) -> SceneCandidate:
+    skills = retrieve_skill_slices(brief, limit=3)
     raw_text = call_reasoning_model(
         provider_name,
         model_name,
@@ -106,6 +119,7 @@ def request_scene_candidate(
         _user_prompt(
             brief,
             examples,
+            skills,
             previous_code=previous_code,
             feedback_lines=feedback_lines,
         ),

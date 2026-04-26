@@ -102,6 +102,7 @@ class CodeProfile:
     imports: list[str] = field(default_factory=list)
     play_calls: int = 0
     wait_calls: int = 0
+    layout_registration_calls: int = 0
     class_names: list[str] = field(default_factory=list)
     line_count: int = 0
 
@@ -156,6 +157,8 @@ def profile_scene_code(scene_code: str) -> CodeProfile:
                 profile.play_calls += 1
             if call_name.endswith(".wait") or short_name == "wait":
                 profile.wait_calls += 1
+            if call_name.endswith(".register_layout_group") or short_name in {"register_layout_group", "register_text_group", "register_panel_group"}:
+                profile.layout_registration_calls += 1
     return profile
 
 
@@ -218,6 +221,8 @@ def validate_generated_scene_code(
         warnings.append("Scene code is long; prefer a tighter scene with fewer moving parts.")
     if len(profile.advanced_features) == 0:
         warnings.append("No advanced Manim features detected; the scene may still feel generic.")
+    if profile.layout_registration_calls == 0:
+        warnings.append("Register the principal layout groups with register_layout_group(...) so the runtime can protect the composition.")
     primitive_count = len(profile.primitive_features)
     advanced_count = len(profile.advanced_features)
     if primitive_count >= 4 and advanced_count == 0:

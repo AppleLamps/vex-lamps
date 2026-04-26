@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import hashlib
 import json
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from state import ProjectState, utc_now_iso
 from tools.transcript import execute as transcribe
 from tools.transcript_utils import load_transcript_bundle
 from visual_intelligence import (
+    PLAN_CACHE_VERSION,
     STYLE_PACKS,
     THEME_BY_VISUAL_TYPE,
     analyze_visual_plan_with_llm,
@@ -72,6 +75,75 @@ def _apply_style_override(spec: dict[str, object], style_pack: str) -> None:
     spec["theme"] = theme
 
 
+def _prepare_visual_spec(
+    spec: dict[str, object],
+    *,
+    style_pack: str,
+    provider_name: str,
+    model_name: str,
+    bundle_root: Path,
+) -> dict[str, object]:
+    prepared = dict(spec)
+    _apply_style_override(prepared, style_pack)
+    prepared["generation_provider"] = provider_name
+    prepared["generation_model"] = model_name
+    prepared["scene_library_roots"] = [str(bundle_root)]
+    prepared["generation_cache_root"] = str(bundle_root / "_manim_cache")
+    return prepared
+
+
+def _plan_cache_key(
+    *,
+    provider_name: str,
+    model_name: str,
+    cards: list[dict[str, object]],
+    clip_duration: float,
+    max_visuals: int,
+    min_visual_sec: float,
+    max_visual_sec: float,
+    scene_cuts: list[float],
+    available_renderers: list[dict[str, object]],
+) -> str:
+    payload = {
+        "version": PLAN_CACHE_VERSION,
+        "provider": provider_name,
+        "model": model_name,
+        "clip_duration": round(clip_duration, 3),
+        "max_visuals": max_visuals,
+        "min_visual_sec": round(min_visual_sec, 3),
+        "max_visual_sec": round(max_visual_sec, 3),
+        "scene_cuts": [round(float(item), 3) for item in scene_cuts],
+        "cards": cards,
+        "available_renderers": available_renderers,
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
+
+
+def _load_cached_plan(cache_root: Path, cache_key: str) -> list[dict[str, object]] | None:
+    target = cache_root / f"{cache_key}.json"
+    if not target.is_file():
+        return None
+    try:
+        payload = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    plan = payload.get("plan")
+    if isinstance(plan, list):
+        return plan
+    return None
+
+
+def _store_cached_plan(cache_root: Path, cache_key: str, plan: list[dict[str, object]]) -> None:
+    cache_root.mkdir(parents=True, exist_ok=True)
+    target = cache_root / f"{cache_key}.json"
+    payload = {
+        "created_at": utc_now_iso(),
+        "plan": plan,
+    }
+    target.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def _render_generated_visual(
     spec: dict[str, object],
     *,
@@ -102,6 +174,11 @@ def _render_generated_visual(
         if len(attempted) >= 3:
             break
     raise VisualRendererError("; ".join(failures) or "No renderer could produce the generated visual.")
+
+
+def _max_render_workers(params: dict, visual_count: int) -> int:
+    requested = int(params.get("max_render_workers", 3) or 3)
+    return max(1, min(requested, visual_count, 4))
 
 
 def execute(params: dict, state: ProjectState) -> dict:
@@ -142,7 +219,11 @@ def execute(params: dict, state: ProjectState) -> dict:
             raise RuntimeError("No transcript-aligned visual cards were available for planning.")
         provider_name, model_name = _provider_and_model(state)
         capabilities = renderer_capabilities()
-        plan = analyze_visual_plan_with_llm(
+        bundle_root = ensure_writable_dir(
+            writable_dir_candidates(state.working_dir, state.output_dir, state.project_id, "auto_visual_bundles")
+        )
+        plan_cache_root = bundle_root / "_plan_cache"
+        plan_cache_key = _plan_cache_key(
             provider_name=provider_name,
             model_name=model_name,
             cards=cards,
@@ -153,9 +234,21 @@ def execute(params: dict, state: ProjectState) -> dict:
             scene_cuts=scene_cuts,
             available_renderers=capabilities,
         )
-        bundle_root = ensure_writable_dir(
-            writable_dir_candidates(state.working_dir, state.output_dir, state.project_id, "auto_visual_bundles")
-        )
+        plan = _load_cached_plan(plan_cache_root, plan_cache_key)
+        plan_cache_hit = plan is not None
+        if plan is None:
+            plan = analyze_visual_plan_with_llm(
+                provider_name=provider_name,
+                model_name=model_name,
+                cards=cards,
+                clip_duration=clip_duration,
+                max_visuals=max_visuals,
+                min_visual_sec=min_visual_sec,
+                max_visual_sec=max_visual_sec,
+                scene_cuts=scene_cuts,
+                available_renderers=capabilities,
+            )
+            _store_cached_plan(plan_cache_root, plan_cache_key, plan)
         timestamp_label = utc_now_iso().replace(":", "-").replace("+00:00", "Z")
         bundle_dir = bundle_root / f"{safe_stem(state.project_name)}_auto_visuals_{timestamp_label}"
         bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -164,23 +257,60 @@ def execute(params: dict, state: ProjectState) -> dict:
 
         applied_overlays: list[dict] = []
         render_failures: list[str] = []
-        for spec in plan:
-            _apply_style_override(spec, style_pack)
-            spec["generation_provider"] = provider_name
-            spec["generation_model"] = model_name
-            spec["scene_library_roots"] = [str(bundle_root)]
-            try:
-                asset, selection_reason = _render_generated_visual(
-                    spec,
-                    preferred_renderer=renderer_name,
-                    render_root=render_root,
-                    width=width,
-                    height=height,
-                    fps=fps,
-                )
-            except VisualRendererError as exc:
-                render_failures.append(str(exc))
+        prepared_specs = [
+            _prepare_visual_spec(
+                spec,
+                style_pack=style_pack,
+                provider_name=provider_name,
+                model_name=model_name,
+                bundle_root=bundle_root,
+            )
+            for spec in plan
+        ]
+        render_results: list[tuple[int, dict[str, object], object, str] | tuple[int, str]] = []
+        worker_count = _max_render_workers(params, len(prepared_specs))
+        if worker_count == 1:
+            for index, spec in enumerate(prepared_specs):
+                try:
+                    asset, selection_reason = _render_generated_visual(
+                        spec,
+                        preferred_renderer=renderer_name,
+                        render_root=render_root,
+                        width=width,
+                        height=height,
+                        fps=fps,
+                    )
+                    render_results.append((index, spec, asset, selection_reason))
+                except VisualRendererError as exc:
+                    render_results.append((index, str(exc)))
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="vex-auto-visuals") as executor:
+                future_map = {
+                    executor.submit(
+                        _render_generated_visual,
+                        spec,
+                        preferred_renderer=renderer_name,
+                        render_root=render_root,
+                        width=width,
+                        height=height,
+                        fps=fps,
+                    ): (index, spec)
+                    for index, spec in enumerate(prepared_specs)
+                }
+                for future in as_completed(future_map):
+                    index, spec = future_map[future]
+                    try:
+                        asset, selection_reason = future.result()
+                        render_results.append((index, spec, asset, selection_reason))
+                    except VisualRendererError as exc:
+                        render_results.append((index, str(exc)))
+
+        for result in sorted(render_results, key=lambda item: item[0]):
+            if len(result) == 2:
+                _, failure = result
+                render_failures.append(str(failure))
                 continue
+            _, spec, asset, selection_reason = result
             applied_overlays.append(
                 {
                     "start": float(spec["start"]),
@@ -256,6 +386,9 @@ def execute(params: dict, state: ProjectState) -> dict:
             "style_pack": style_pack,
             "mode": mode,
             "renderer_capabilities": capabilities,
+            "render_workers": worker_count,
+            "plan_cache_hit": plan_cache_hit,
+            "plan_cache_key": plan_cache_key,
             "transcript_paths": transcript_bundle.get("paths", {}),
             "scene_cuts": scene_cuts,
             "plan": plan,

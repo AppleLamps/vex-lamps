@@ -11,6 +11,7 @@ import numpy as np
 
 import config
 from vex_manim.briefs import SceneBrief
+from vex_manim.layout_qa import LayoutReport
 from vex_manim.validator import ValidationReport
 
 
@@ -57,6 +58,7 @@ class QualityReport:
     score: float
     issues: list[str]
     preview: PreviewReport
+    layout: LayoutReport | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -64,6 +66,7 @@ class QualityReport:
             "score": self.score,
             "issues": list(self.issues),
             "preview": self.preview.to_dict(),
+            "layout": self.layout.to_dict() if self.layout is not None else None,
         }
 
     def feedback_lines(self) -> list[str]:
@@ -75,12 +78,12 @@ def extract_preview_frames(
     output_dir: Path,
     *,
     duration_sec: float,
-    frame_count: int = 3,
+    frame_count: int = 2,
 ) -> list[Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     if duration_sec <= 0:
         return []
-    fractions = [0.2, 0.55, 0.85][:frame_count]
+    fractions = [0.24, 0.72, 0.9][:frame_count]
     frame_paths: list[Path] = []
     for index, fraction in enumerate(fractions, start=1):
         timestamp = max(0.0, duration_sec * fraction)
@@ -144,6 +147,8 @@ def evaluate_generated_scene_quality(
     brief: SceneBrief,
     validation: ValidationReport,
     preview: PreviewReport,
+    *,
+    layout: LayoutReport | None = None,
 ) -> QualityReport:
     issues: list[str] = []
     target_duration = float(brief.render_constraints.get("target_duration_sec") or brief.duration_sec or 0.0)
@@ -167,9 +172,13 @@ def evaluate_generated_scene_quality(
         issues.append("The data scene does not leverage Manim's dynamic strengths; use trackers, charts, or morphs.")
     if len(profile.advanced_features) == 0 and len(profile.primitive_features) >= 3:
         issues.append("The composition still reads like boxes-and-text; use richer Manim features to avoid a generic look.")
+    if layout is not None:
+        issues.extend(list(layout.issues))
     score = 1.0
     score -= min(len(issues) * 0.16, 0.8)
     score += min(len(profile.advanced_features), 5) * 0.03
     score += min(preview.mean_occupancy, 0.18) * 0.35
+    if layout is not None:
+        score = min(score, layout.score + 0.12)
     score = round(max(0.0, min(score, 1.0)), 3)
-    return QualityReport(passed=not issues, score=score, issues=issues, preview=preview)
+    return QualityReport(passed=not issues, score=score, issues=issues, preview=preview, layout=layout)

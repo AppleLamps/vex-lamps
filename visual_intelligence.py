@@ -175,6 +175,7 @@ FILLER_LEAD_WORDS = {
 }
 TRAILING_TRIM_WORDS = {"with", "by", "to", "for", "and", "or", "of", "in", "on", "a", "an", "the", "then", "next", "finally"}
 BACKGROUND_MOTIFS = ("grid", "rings", "beams", "constellation", "bands")
+PLAN_CACHE_VERSION = "2026-04-26-v1"
 LAYOUT_VARIANTS = {
     "metric_callout": "hero_split",
     "keyword_stack": "stagger_stack",
@@ -969,9 +970,49 @@ def _candidate_pool(cards: list[dict[str, Any]], max_visuals: int) -> list[dict[
         if any(abs(card["start"] - existing["start"]) < 0.6 for existing in pool):
             continue
         pool.append(card)
-        if len(pool) >= max(max_visuals * 4, 12):
+        if len(pool) >= max(max_visuals * 3, 10):
             break
     return pool
+
+
+def _should_use_fast_plan(candidate_cards: list[dict[str, Any]], max_visuals: int) -> bool:
+    if not candidate_cards:
+        return True
+    head = candidate_cards[: max(max_visuals * 2, 4)]
+    strong = 0
+    ambiguous = 0
+    for card in head:
+        visualizability = float(card.get("visualizability") or 0.0)
+        generic_penalty = float(card.get("generic_penalty") or 0.0)
+        explicit_signal = (
+            int(card.get("numeric_hits") or 0) > 0
+            or float(card.get("process_cues") or 0.0) >= 0.42
+            or float(card.get("contrast_cues") or 0.0) >= 0.4
+        )
+        if explicit_signal and visualizability >= 0.68 and generic_penalty <= 0.36:
+            strong += 1
+        if visualizability < 0.55 or generic_penalty > 0.58:
+            ambiguous += 1
+    needed = min(max_visuals, 3)
+    return strong >= max(1, needed) and ambiguous <= 1
+
+
+def _should_run_critic(plan: list[dict[str, Any]]) -> bool:
+    if len(plan) >= 3:
+        return True
+    replace_count = sum(1 for item in plan if str(item.get("composition_mode") or "") == "replace")
+    if replace_count >= 2:
+        return True
+    avg_confidence = sum(float(item.get("confidence") or 0.0) for item in plan) / max(len(plan), 1)
+    if avg_confidence < 0.72:
+        return True
+    templates = [str(item.get("template") or "") for item in plan]
+    if len(set(templates)) < len(templates):
+        return True
+    if any(template in {"quote_focus", "keyword_stack"} for template in templates):
+        return True
+    headlines = [str(item.get("headline") or "").strip().lower() for item in plan if str(item.get("headline") or "").strip()]
+    return len(set(headlines)) < len(headlines)
 
 
 def fallback_visual_plan(
@@ -1055,6 +1096,8 @@ def analyze_visual_plan_with_llm(
         return fallback
 
     candidate_cards = _candidate_pool(cards, max_visuals)
+    if _should_use_fast_plan(candidate_cards, max_visuals):
+        return fallback
     template_lines = "\n".join(f"- {name}: {description}" for name, description in SUPPORTED_TEMPLATES.items())
     renderer_lines = _format_renderer_capabilities(available_renderers)
     system_prompt = (
@@ -1109,6 +1152,8 @@ def analyze_visual_plan_with_llm(
     )
     if not normalized_director:
         return fallback
+    if not _should_run_critic(normalized_director):
+        return normalized_director or fallback
 
     critic_system_prompt = (
         "You are a strict motion-design critic and QA lead. "

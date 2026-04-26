@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import re
@@ -13,9 +14,15 @@ from engine import probe_video
 from renderers.base import RenderedAsset, RendererStatus, VisualRenderer, VisualRendererError
 from vex_manim.briefs import build_scene_brief
 from vex_manim.director import request_scene_candidate, write_generation_report
+from vex_manim.layout_qa import analyze_layout_snapshot, load_layout_snapshot
 from vex_manim.qa import analyze_preview, evaluate_generated_scene_quality, extract_preview_frames
 from vex_manim.scene_library import retrieve_scene_examples
 from vex_manim.validator import validate_generated_scene_code
+
+
+MANIM_CACHE_VERSION = "2026-04-26-v1"
+MAX_GENERATION_ATTEMPTS = 2
+_LATEX_RUNTIME_READY_CACHE: bool | None = None
 
 
 def _safe_scene_name(spec_id: str) -> str:
@@ -415,7 +422,7 @@ class {scene_name}(Scene):
 
 
 def _preview_dimensions(width: int, height: int) -> tuple[int, int]:
-    preview_width = min(width, 960)
+    preview_width = min(width, 720)
     preview_height = max(240, int(round(preview_width * (height / max(width, 1)))))
     if preview_height % 2 != 0:
         preview_height += 1
@@ -423,8 +430,12 @@ def _preview_dimensions(width: int, height: int) -> tuple[int, int]:
 
 
 def _latex_runtime_ready(probe_root: Path) -> bool:
+    global _LATEX_RUNTIME_READY_CACHE
+    if _LATEX_RUNTIME_READY_CACHE is not None:
+        return _LATEX_RUNTIME_READY_CACHE
     latex_binary = shutil.which("latex")
     if not latex_binary:
+        _LATEX_RUNTIME_READY_CACHE = False
         return False
     probe_dir = probe_root / "_runtime_checks" / "latex_probe"
     try:
@@ -444,6 +455,7 @@ def _latex_runtime_ready(probe_root: Path) -> bool:
             encoding="utf-8",
         )
     except OSError:
+        _LATEX_RUNTIME_READY_CACHE = False
         return False
     command = [
         latex_binary,
@@ -455,10 +467,13 @@ def _latex_runtime_ready(probe_root: Path) -> bool:
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.TimeoutExpired):
+        _LATEX_RUNTIME_READY_CACHE = False
         return False
     if result.returncode != 0:
+        _LATEX_RUNTIME_READY_CACHE = False
         return False
-    return (probe_dir / "probe.dvi").is_file()
+    _LATEX_RUNTIME_READY_CACHE = (probe_dir / "probe.dvi").is_file()
+    return _LATEX_RUNTIME_READY_CACHE
 
 
 def _scene_wrapper(scene_code: str, spec: dict[str, Any], brief_payload: dict[str, Any]) -> str:
@@ -565,6 +580,138 @@ def _history_roots(spec: dict[str, Any]) -> list[Path]:
     return roots
 
 
+def _example_limit_for_brief(brief) -> int:
+    if brief.scene_family in {"system_map", "comparison_morph", "timeline_journey", "interface_focus"}:
+        return 3
+    return 2 if brief.animation_intensity == "low" else 3
+
+
+def _attempt_budget_for_brief(brief, spec: dict[str, Any]) -> int:
+    importance = float(spec.get("importance") or 0.0)
+    if brief.scene_family in {"system_map", "comparison_morph", "timeline_journey", "interface_focus"}:
+        return MAX_GENERATION_ATTEMPTS
+    if importance >= 0.72 or brief.animation_intensity == "high":
+        return MAX_GENERATION_ATTEMPTS
+    return 1
+
+
+def _preview_render_budget(brief, fps: float) -> tuple[float, int]:
+    if brief.animation_intensity == "low" and brief.camera_style == "composed":
+        return min(fps, 15.0), 1
+    if brief.scene_family in {"kinetic_quote", "kinetic_stack"}:
+        return min(fps, 15.0), 1
+    return min(fps, 18.0), 2
+
+
+def _cache_root(spec: dict[str, Any]) -> Path | None:
+    raw = str(spec.get("generation_cache_root") or "").strip()
+    if not raw:
+        return None
+    return Path(raw)
+
+
+def _cache_key(spec: dict[str, Any], *, width: int, height: int, fps: float, latex_available: bool) -> str:
+    payload = {
+        "version": MANIM_CACHE_VERSION,
+        "provider": str(spec.get("generation_provider") or ""),
+        "model": str(spec.get("generation_model") or ""),
+        "template": str(spec.get("template") or ""),
+        "headline": str(spec.get("headline") or ""),
+        "deck": str(spec.get("deck") or ""),
+        "eyebrow": str(spec.get("eyebrow") or ""),
+        "emphasis_text": str(spec.get("emphasis_text") or ""),
+        "supporting_lines": list(spec.get("supporting_lines") or []),
+        "steps": list(spec.get("steps") or []),
+        "keywords": list(spec.get("keywords") or []),
+        "quote_text": str(spec.get("quote_text") or ""),
+        "left_label": str(spec.get("left_label") or ""),
+        "right_label": str(spec.get("right_label") or ""),
+        "left_detail": str(spec.get("left_detail") or ""),
+        "right_detail": str(spec.get("right_detail") or ""),
+        "footer_text": str(spec.get("footer_text") or ""),
+        "sentence_text": str(spec.get("sentence_text") or ""),
+        "context_text": str(spec.get("context_text") or ""),
+        "visual_type_hint": str(spec.get("visual_type_hint") or ""),
+        "style_pack": str(spec.get("style_pack") or ""),
+        "theme": dict(spec.get("theme") or {}),
+        "background_motif": str(spec.get("background_motif") or ""),
+        "position": str(spec.get("position") or ""),
+        "scale": float(spec.get("scale") or 1.0),
+        "duration": float(spec.get("duration") or 0.0),
+        "importance": float(spec.get("importance") or 0.0),
+        "composition_mode": str(spec.get("composition_mode") or ""),
+        "width": width,
+        "height": height,
+        "fps": round(fps, 3),
+        "latex_available": latex_available,
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(serialized.encode("utf-8")).hexdigest()
+
+
+def _cache_entry(cache_root: Path, cache_key: str) -> Path:
+    return cache_root / cache_key
+
+
+def _load_cached_asset(cache_entry: Path) -> RenderedAsset | None:
+    metadata_path = cache_entry / "cache_metadata.json"
+    if not metadata_path.is_file():
+        return None
+    try:
+        payload = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    asset_path = Path(str(payload.get("asset_path") or ""))
+    script_path = Path(str(payload.get("script_path") or ""))
+    if not asset_path.is_file() or not script_path.is_file():
+        return None
+    return RenderedAsset(
+        asset_path=str(asset_path),
+        width=int(payload.get("width") or 0),
+        height=int(payload.get("height") or 0),
+        duration_sec=float(payload.get("duration_sec") or 0.0),
+        renderer="manim",
+        job_dir=str(cache_entry),
+        script_path=str(script_path),
+        artifact_paths=dict(payload.get("artifact_paths") or {}),
+        metadata=dict(payload.get("metadata") or {}),
+    )
+
+
+def _store_cached_asset(
+    cache_entry: Path,
+    *,
+    asset_path: Path,
+    script_path: Path,
+    artifact_paths: dict[str, str],
+    metadata: dict[str, Any],
+) -> None:
+    cache_entry.mkdir(parents=True, exist_ok=True)
+    cached_asset_path = cache_entry / "scene.mp4"
+    shutil.copy2(asset_path, cached_asset_path)
+    cached_script_path = cache_entry / "scene.py"
+    shutil.copy2(script_path, cached_script_path)
+    cached_artifacts: dict[str, str] = {}
+    for name, source in artifact_paths.items():
+        source_path = Path(str(source))
+        if not source_path.is_file():
+            continue
+        target_path = cache_entry / source_path.name
+        if target_path.resolve() != source_path.resolve():
+            shutil.copy2(source_path, target_path)
+        cached_artifacts[name] = str(target_path)
+    cache_metadata = {
+        "asset_path": str(cached_asset_path),
+        "script_path": str(cached_script_path),
+        "artifact_paths": cached_artifacts,
+        "metadata": metadata,
+        "width": int(metadata.get("width") or 0),
+        "height": int(metadata.get("height") or 0),
+        "duration_sec": float(metadata.get("duration_sec") or 0.0),
+    }
+    (cache_entry / "cache_metadata.json").write_text(json.dumps(cache_metadata, indent=2), encoding="utf-8")
+
+
 class ManimRenderer(VisualRenderer):
     name = "manim"
     supported_templates = {
@@ -611,13 +758,13 @@ class ManimRenderer(VisualRenderer):
         width: int,
         height: int,
         fps: float,
+        latex_available: bool,
     ) -> tuple[Path, dict[str, Any], dict[str, str]]:
         provider_name = str(spec.get("generation_provider") or "").strip().lower()
         model_name = str(spec.get("generation_model") or "").strip()
         if provider_name not in {"gemini", "claude"} or not model_name:
             raise VisualRendererError("Generated Manim scenes require a configured reasoning model.")
 
-        latex_available = _latex_runtime_ready(job_dir)
         brief = build_scene_brief(spec, width=width, height=height, fps=fps, latex_available=latex_available)
         brief.render_constraints["latex_available"] = latex_available
         if not latex_available:
@@ -625,9 +772,11 @@ class ManimRenderer(VisualRenderer):
         examples = retrieve_scene_examples(
             brief,
             history_roots=_history_roots(spec),
-            limit=3,
+            limit=_example_limit_for_brief(brief),
             forbidden_features={"DecimalNumber", "BarChart", "MathTex", "Tex", "Matrix", "Integer", "Variable"} if not latex_available else None,
         )
+        attempt_budget = _attempt_budget_for_brief(brief, spec)
+        preview_fps, preview_frame_count = _preview_render_budget(brief, fps)
         brief_path = job_dir / "scene_brief.json"
         brief_path.write_text(json.dumps(brief.to_dict(), indent=2), encoding="utf-8")
         attempts_root = job_dir / "attempts"
@@ -639,7 +788,7 @@ class ManimRenderer(VisualRenderer):
         chosen_candidate = None
         chosen_quality: dict[str, Any] | None = None
 
-        for attempt_index in range(1, 4):
+        for attempt_index in range(1, attempt_budget + 1):
             attempt_dir = attempts_root / f"attempt_{attempt_index:02d}"
             attempt_dir.mkdir(parents=True, exist_ok=True)
             try:
@@ -675,7 +824,9 @@ class ManimRenderer(VisualRenderer):
                 feedback_lines = _feedback_lines(validation.to_dict(), None)
                 continue
 
-            scene_source = _scene_wrapper(candidate.scene_code, spec, brief.to_dict())
+            attempt_spec = dict(spec)
+            attempt_spec["layout_snapshot_path"] = str(attempt_dir / "layout_snapshot.json")
+            scene_source = _scene_wrapper(candidate.scene_code, attempt_spec, brief.to_dict())
             script_path = attempt_dir / "generated_scene.py"
             script_path.write_text(scene_source, encoding="utf-8")
             preview_width, preview_height = _preview_dimensions(width, height)
@@ -688,13 +839,14 @@ class ManimRenderer(VisualRenderer):
                     output_file="GeneratedScenePreview",
                     width=preview_width,
                     height=preview_height,
-                    fps=min(fps, 24.0),
+                    fps=preview_fps,
                 )
                 preview_metadata = probe_video(str(preview_video_path))
                 preview_frames = extract_preview_frames(
                     str(preview_video_path),
                     attempt_dir / "preview_frames",
                     duration_sec=float(preview_metadata.get("duration_sec") or 0.0),
+                    frame_count=preview_frame_count,
                 )
                 preview_report = analyze_preview(
                     str(preview_video_path),
@@ -702,7 +854,12 @@ class ManimRenderer(VisualRenderer):
                     preview_frames,
                     theme=_theme_defaults(spec),
                 )
-                quality = evaluate_generated_scene_quality(brief, validation, preview_report)
+                layout_report = None
+                layout_snapshot_path = attempt_dir / "layout_snapshot.json"
+                if layout_snapshot_path.is_file():
+                    layout_report = analyze_layout_snapshot(load_layout_snapshot(layout_snapshot_path), brief)
+                    attempt_record["layout"] = layout_report.to_dict()
+                quality = evaluate_generated_scene_quality(brief, validation, preview_report, layout=layout_report)
                 attempt_record["preview"] = preview_report.to_dict()
                 attempt_record["quality"] = quality.to_dict()
             except Exception as exc:
@@ -738,6 +895,8 @@ class ManimRenderer(VisualRenderer):
             "generation_report_path": str(report_path),
             "scene_brief_path": str(brief_path),
         }
+        layout_snapshot_path = job_dir / "layout_snapshot.json"
+        artifact_paths["layout_snapshot_path"] = str(layout_snapshot_path)
         metadata = {
             "scene_generation_mode": "llm_codegen",
             "scene_family": brief.scene_family,
@@ -746,6 +905,7 @@ class ManimRenderer(VisualRenderer):
             "selected_examples": [example.example_id for example in examples],
             "quality_score": (chosen_quality or {}).get("score"),
             "fallback_used": fallback_used,
+            "attempt_budget": attempt_budget,
         }
         if chosen_scene_source is None:
             raise VisualRendererError(
@@ -753,7 +913,12 @@ class ManimRenderer(VisualRenderer):
             )
 
         final_script_path = job_dir / "scene.py"
-        final_script_path.write_text(chosen_scene_source, encoding="utf-8")
+        final_spec = dict(spec)
+        final_spec["layout_snapshot_path"] = str(layout_snapshot_path)
+        final_script_path.write_text(
+            _scene_wrapper(chosen_candidate.scene_code, final_spec, brief.to_dict()),
+            encoding="utf-8",
+        )
         return final_script_path, metadata, artifact_paths
 
     def render(
@@ -773,6 +938,15 @@ class ManimRenderer(VisualRenderer):
         artifact_paths: dict[str, str] = {}
         scene_metadata: dict[str, Any] = {}
         scene_name = "GeneratedScene"
+        latex_available = _latex_runtime_ready(job_dir)
+        cache_root = _cache_root(spec)
+        cache_entry = None
+        if cache_root is not None:
+            cache_key = _cache_key(spec, width=width, height=height, fps=fps, latex_available=latex_available)
+            cache_entry = _cache_entry(cache_root, cache_key)
+            cached_asset = _load_cached_asset(cache_entry)
+            if cached_asset is not None:
+                return cached_asset
         try:
             script_path, scene_metadata, artifact_paths = self._attempt_generated_scene(
                 spec,
@@ -780,6 +954,7 @@ class ManimRenderer(VisualRenderer):
                 width=width,
                 height=height,
                 fps=fps,
+                latex_available=latex_available,
             )
         except Exception as exc:
             scene_name = _safe_scene_name(spec_id)
@@ -803,7 +978,7 @@ class ManimRenderer(VisualRenderer):
             fps=fps,
         )
         video_metadata = probe_video(str(asset_path))
-        return RenderedAsset(
+        final_asset = RenderedAsset(
             asset_path=str(asset_path),
             width=int(video_metadata.get("width") or width),
             height=int(video_metadata.get("height") or height),
@@ -814,3 +989,12 @@ class ManimRenderer(VisualRenderer):
             artifact_paths=artifact_paths,
             metadata={**scene_metadata, **video_metadata},
         )
+        if cache_entry is not None and scene_metadata.get("scene_generation_mode") == "llm_codegen" and not scene_metadata.get("fallback_used"):
+            _store_cached_asset(
+                cache_entry,
+                asset_path=Path(final_asset.asset_path),
+                script_path=Path(final_asset.script_path),
+                artifact_paths=final_asset.artifact_paths,
+                metadata=final_asset.metadata,
+            )
+        return final_asset

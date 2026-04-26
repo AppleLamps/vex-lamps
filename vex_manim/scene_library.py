@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -59,6 +60,8 @@ bars = BarChart(
     bar_colors=[self.theme_color("panel_stroke"), self.theme_color("accent_secondary"), self.theme_color("accent")],
 )
 bars.move_to(RIGHT * 2.8 + DOWN * 0.25)
+self.register_layout_group("hero_metric", hero, role="metric")
+self.register_layout_group("bars", bars, role="chart")
 self.play(LaggedStart(FadeIn(hero), DrawBorderThenFill(bars), lag_ratio=0.18), run_time=0.9)
 self.play(tracker.animate.set_value(3.0), self.camera_frame.animate.scale(0.92).move_to(bars), run_time=0.8)
 """,
@@ -98,6 +101,8 @@ bars = VGroup(*[
     for index, color in [(1, self.theme_color("panel_stroke")), (2, self.theme_color("accent_secondary")), (3, self.theme_color("accent"))]
 ])
 hero = always_redraw(lambda: self.fit_text(f"{tracker.get_value():.1f}x faster", max_width=4.6, max_font_size=78).move_to(LEFT * 3.0))
+self.register_layout_group("hero_metric", hero, role="metric")
+self.register_layout_group("axis_bundle", VGroup(axis, labels, bars), role="chart")
 self.play(FadeIn(hero), Create(axis), FadeIn(labels), LaggedStart(*[FadeIn(bar) for bar in bars], lag_ratio=0.08), run_time=0.9)
 self.play(tracker.animate.set_value(3.0), self.camera.frame.animate.scale(0.92).move_to(axis), run_time=0.8)
 """,
@@ -119,6 +124,7 @@ connectors = VGroup(*[
     for i in range(len(nodes) - 1)
 ])
 path_glow = TracedPath(nodes[1].get_center, stroke_color=self.theme_color("accent_secondary"), stroke_width=4)
+self.register_layout_group("flow_nodes", nodes, role="chart")
 self.add(path_glow)
 self.play(LaggedStart(*[GrowFromCenter(node) for node in nodes], lag_ratio=0.14), run_time=0.9)
 self.play(LaggedStart(*[Create(connector) for connector in connectors], lag_ratio=0.1), run_time=0.8)
@@ -143,6 +149,8 @@ after = VGroup(
 ).arrange(DOWN, buff=0.28)
 panel = self.make_glass_panel(4.2, 2.7)
 before.move_to(panel.get_center())
+self.register_layout_group("comparison_panel", panel, role="panel")
+self.register_layout_group("comparison_copy", before, role="hero")
 self.play(FadeIn(panel), FadeIn(before), run_time=0.7)
 self.play(TransformMatchingShapes(before, after), self.camera_frame.animate.scale(0.94), run_time=0.8)
 """,
@@ -158,6 +166,7 @@ self.play(TransformMatchingShapes(before, after), self.camera_frame.animate.scal
 quote = self.fit_text("Specific beats beat generic motion", max_width=9.2, max_font_size=60)
 underline = Underline(quote, color=self.theme_color("accent"), stroke_width=6).shift(DOWN * 0.08)
 kicker = self.make_pill("INSIGHT")
+self.register_layout_group("quote_block", VGroup(kicker, quote, underline), role="quote")
 self.play(FadeIn(kicker, shift=UP * 0.1), Write(quote), run_time=0.8)
 self.play(Create(underline), self.camera_frame.animate.scale(0.95).move_to(quote), run_time=0.6)
 """,
@@ -176,6 +185,7 @@ labels = VGroup(*[
     for label in ["Capture", "Score", "Render", "Composite"]
 ]).arrange(RIGHT, buff=1.1).next_to(line, UP, buff=0.5)
 marker = Dot(line.n2p(0), radius=0.12, color=self.theme_color("accent"))
+self.register_layout_group("timeline_bundle", VGroup(line, labels, marker), role="chart")
 self.play(Create(line), FadeIn(labels), run_time=0.7)
 self.play(MoveAlongPath(marker, line), LaggedStart(*[Indicate(label) for label in labels], lag_ratio=0.18), run_time=1.0)
 """,
@@ -198,6 +208,8 @@ labels = VGroup(*[
 for panel, label in zip(panels, labels):
     label.move_to(panel.get_center())
 focus = always_redraw(lambda: SurroundingRectangle(labels[1], buff=0.22, color=self.theme_color("accent"), stroke_width=4))
+self.register_layout_group("ui_panels", panels, role="panel")
+self.register_layout_group("ui_focus", VGroup(labels, focus), role="chart")
 self.play(LaggedStart(*[FadeIn(panel) for panel in panels], *[FadeIn(label) for label in labels], lag_ratio=0.08), run_time=0.8)
 self.add(focus)
 self.play(self.camera_frame.animate.scale(0.82).move_to(panels[1]), run_time=0.7)
@@ -217,12 +229,29 @@ def _score_example(brief: SceneBrief, example: SceneExample) -> float:
     return score
 
 
-def _history_examples(history_roots: Iterable[Path]) -> list[SceneExample]:
+def _normalized_history_roots(history_roots: Iterable[Path]) -> tuple[str, ...]:
+    normalized = {
+        str(Path(root).resolve())
+        for root in history_roots
+        if str(root).strip()
+    }
+    return tuple(sorted(normalized))
+
+
+@lru_cache(maxsize=12)
+def _history_examples_cached(history_roots: tuple[str, ...]) -> tuple[SceneExample, ...]:
     examples: list[SceneExample] = []
-    for root in history_roots:
+    for root_value in history_roots:
+        root = Path(root_value)
         if not root.exists():
             continue
-        for report_path in root.rglob("generation_report.json"):
+        report_paths = [
+            path
+            for path in root.rglob("generation_report.json")
+            if "_manim_cache" not in path.parts and "__pycache__" not in path.parts
+        ]
+        report_paths.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+        for report_path in report_paths[:48]:
             try:
                 payload = json.loads(report_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
@@ -243,7 +272,11 @@ def _history_examples(history_roots: Iterable[Path]) -> list[SceneExample]:
                     source=str(report_path),
                 )
             )
-    return examples
+    return tuple(examples)
+
+
+def _history_examples(history_roots: Iterable[Path]) -> list[SceneExample]:
+    return list(_history_examples_cached(_normalized_history_roots(history_roots)))
 
 
 def retrieve_scene_examples(
