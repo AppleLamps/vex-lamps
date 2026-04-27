@@ -4,6 +4,7 @@ import contextlib
 import os
 import re
 import shutil
+import sys
 import threading
 import time
 import uuid
@@ -518,6 +519,95 @@ def _compact_live_status(
     return " | ".join(part for part in parts if part)
 
 
+def _spinner_status_text(
+    command: str,
+    trace_events: list[TraceEvent],
+    active_tool_name: str | None,
+    tool_logs: LiveLogBuffer,
+    *,
+    elapsed_sec: int,
+) -> str:
+    latest_log = ""
+    tool_lines = tool_logs.snapshot()
+    if tool_lines:
+        latest_log = _clean_live_status_line(tool_lines[-1])
+
+    if active_tool_name:
+        parts = [f"Running tool: {active_tool_name}"]
+        if latest_log:
+            parts.append(latest_log)
+        parts.append(f"{max(elapsed_sec, 0)}s")
+        return " | ".join(part for part in parts if part)
+
+    if not trace_events:
+        return f"Thinking... | {truncate_trace_text(command, 80)} | {max(elapsed_sec, 0)}s"
+
+    last_event = trace_events[-1]
+    title = str(last_event.title or "").strip()
+    detail = str(last_event.detail or "").strip()
+    status = str(last_event.status or "info").strip().lower()
+
+    if title.startswith("Planning pass"):
+        label = "Thinking..."
+        detail = "Reviewing the project"
+    elif title.startswith("Sending request to "):
+        label = "Calling model..."
+    elif title == "Streaming assistant response":
+        label = "Writing response..."
+    elif title == "Model requested tools":
+        label = "Preparing tools..."
+    elif title.startswith("Running "):
+        label = f"Running tool: {title.replace('Running ', '', 1)}"
+        detail = latest_log or detail
+    elif title.endswith(" completed"):
+        label = f"Finished tool: {title.replace(' completed', '', 1)}"
+    elif title.endswith(" failed"):
+        label = f"Tool failed: {title.replace(' failed', '', 1)}"
+    elif title == "Final response ready":
+        label = "Finalizing response..."
+    elif status == "error":
+        label = "Handling error..."
+    else:
+        label = title or "Working..."
+
+    parts = [label]
+    if latest_log and not active_tool_name and not title.startswith("Running "):
+        parts.append(latest_log)
+    elif detail:
+        parts.append(truncate_trace_text(detail, 120))
+    parts.append(f"{max(elapsed_sec, 0)}s")
+    return " | ".join(part for part in parts if part)
+
+
+class TerminalSpinnerLine:
+    def __init__(self, stream=None) -> None:
+        self.stream = stream or sys.__stdout__
+        self.frames = ("|", "/", "-", "\\")
+        self.enabled = bool(getattr(self.stream, "isatty", lambda: False)())
+        self._lock = threading.Lock()
+        self._last_rendered_width = 0
+
+    def render(self, text: str, *, frame_index: int) -> None:
+        if not self.enabled:
+            return
+        width = max(shutil.get_terminal_size((120, 20)).columns - 1, 24)
+        line = f"{self.frames[frame_index % len(self.frames)]} {truncate_trace_text(text, width - 2)}"
+        with self._lock:
+            padding = max(self._last_rendered_width - len(line), 0)
+            self.stream.write("\r" + line + (" " * padding))
+            self.stream.flush()
+            self._last_rendered_width = len(line)
+
+    def clear(self) -> None:
+        if not self.enabled:
+            return
+        with self._lock:
+            if self._last_rendered_width > 0:
+                self.stream.write("\r" + (" " * self._last_rendered_width) + "\r")
+                self.stream.flush()
+                self._last_rendered_width = 0
+
+
 def render_live_agent_view(
     output: Text,
     trace_events: list[TraceEvent],
@@ -577,10 +667,11 @@ def run_agent_with_live_trace(agent: VideoAgent, command: str):
     active_tool_name: str | None = None
     started_at = time.monotonic()
     stop_event = threading.Event()
-    status_text = {"value": f"Thinking | {truncate_trace_text(command, 80)} | 0s"}
+    status_text = {"value": f"Thinking... | {truncate_trace_text(command, 80)} | 0s"}
+    spinner_line = TerminalSpinnerLine()
 
     def refresh_status() -> None:
-        status_text["value"] = _compact_live_status(
+        status_text["value"] = _spinner_status_text(
             command,
             trace_events,
             active_tool_name,
@@ -606,38 +697,31 @@ def run_agent_with_live_trace(agent: VideoAgent, command: str):
             active_tool_name = None
         refresh_status()
 
-    progress = Progress(
-        SpinnerColumn(style="cyan"),
-        TextColumn("{task.fields[status]}", justify="left"),
-        console=console,
-        transient=True,
-    )
     response = None
-    with progress:
-        task_id = progress.add_task("", total=None, status=status_text["value"])
+    frame_index = {"value": 0}
 
-        def heartbeat() -> None:
-            while not stop_event.is_set():
-                refresh_status()
-                progress.update(task_id, status=status_text["value"])
-                stop_event.wait(0.75)
-
-        heartbeat_thread = threading.Thread(target=heartbeat, name="vex-live-status", daemon=True)
-        heartbeat_thread.start()
-        try:
-            with contextlib.redirect_stdout(tool_logs), contextlib.redirect_stderr(tool_logs):
-                response = agent.run(
-                    command,
-                    stream_callback=stream_callback,
-                    tool_callback=tool_callback,
-                    trace_callback=trace_callback,
-                )
-        finally:
-            tool_logs.flush()
-            stop_event.set()
-            heartbeat_thread.join(timeout=1.5)
+    def heartbeat() -> None:
+        while not stop_event.is_set():
             refresh_status()
-            progress.update(task_id, status=status_text["value"])
+            spinner_line.render(status_text["value"], frame_index=frame_index["value"])
+            frame_index["value"] += 1
+            stop_event.wait(0.12)
+
+    heartbeat_thread = threading.Thread(target=heartbeat, name="vex-live-status", daemon=True)
+    heartbeat_thread.start()
+    try:
+        with contextlib.redirect_stdout(tool_logs), contextlib.redirect_stderr(tool_logs):
+            response = agent.run(
+                command,
+                stream_callback=stream_callback,
+                tool_callback=tool_callback,
+                trace_callback=trace_callback,
+            )
+    finally:
+        tool_logs.flush()
+        stop_event.set()
+        heartbeat_thread.join(timeout=1.5)
+        spinner_line.clear()
     if response is None:
         raise AgentLoopError("The agent run did not return a response.")
     return response, trace_events
