@@ -4,6 +4,7 @@ import contextlib
 import os
 import re
 import shutil
+import threading
 import time
 import uuid
 from collections import deque
@@ -481,6 +482,42 @@ def _one_line_status(
     return truncate_trace_text(collapsed or "Working...", 220)
 
 
+def _clean_live_status_line(line: str) -> str:
+    cleaned = str(line or "").strip()
+    cleaned = re.sub(r"^\[[^\]]+\]\s*", "", cleaned)
+    return truncate_trace_text(cleaned, 180)
+
+
+def _compact_live_status(
+    command: str,
+    trace_events: list[TraceEvent],
+    active_tool_name: str | None,
+    tool_logs: LiveLogBuffer,
+    *,
+    elapsed_sec: int,
+) -> str:
+    if active_tool_name:
+        label = f"Running {active_tool_name}"
+        detail = ""
+    else:
+        label, detail, _status_style, _show_spinner = _status_from_trace_events(trace_events, active_tool_name)
+    latest_log = ""
+    tool_lines = tool_logs.snapshot()
+    if tool_lines:
+        latest_log = _clean_live_status_line(tool_lines[-1])
+    if detail == "Waiting for the first agent update.":
+        detail = ""
+    if label == "Thinking" and not detail:
+        detail = truncate_trace_text(command, 80)
+    parts = [label or "Working"]
+    if latest_log:
+        parts.append(latest_log)
+    elif detail:
+        parts.append(truncate_trace_text(detail, 120))
+    parts.append(f"{max(elapsed_sec, 0)}s")
+    return " | ".join(part for part in parts if part)
+
+
 def render_live_agent_view(
     output: Text,
     trace_events: list[TraceEvent],
@@ -538,46 +575,63 @@ def run_agent_with_live_trace(agent: VideoAgent, command: str):
     trace_events: list[TraceEvent] = []
     tool_logs = LiveLogBuffer()
     active_tool_name: str | None = None
+    started_at = time.monotonic()
+    stop_event = threading.Event()
+    status_text = {"value": f"Thinking | {truncate_trace_text(command, 80)} | 0s"}
 
-    progress = Progress(
-        SpinnerColumn(style="cyan"),
-        TextColumn("{task.fields[status]}", justify="left"),
-        console=console,
-        transient=True,
-    )
+    def refresh_status() -> None:
+        status_text["value"] = _compact_live_status(
+            command,
+            trace_events,
+            active_tool_name,
+            tool_logs,
+            elapsed_sec=int(time.monotonic() - started_at),
+        )
 
-    with progress:
-        task_id = progress.add_task("", total=None, status=truncate_trace_text(f"Starting {command}", 220))
+    tool_logs.on_update = refresh_status
 
-        def refresh_status() -> None:
-            progress.update(task_id, status=_one_line_status(trace_events, active_tool_name, tool_logs))
-
-        tool_logs.on_update = refresh_status
-
-        def stream_callback(chunk: str) -> None:
-            output.append(chunk)
-            refresh_status()
-
-        def trace_callback(event: TraceEvent) -> None:
-            trace_events.append(event)
-            refresh_status()
-
-        def tool_callback(phase: str, tool_name: str, _ok: bool) -> None:
-            nonlocal active_tool_name
-            if phase == "start":
-                active_tool_name = tool_name
-            elif phase == "finish" and active_tool_name == tool_name:
-                active_tool_name = None
-            refresh_status()
-
-        with contextlib.redirect_stdout(tool_logs), contextlib.redirect_stderr(tool_logs):
-            response = agent.run(
-                command,
-                stream_callback=stream_callback,
-                tool_callback=tool_callback,
-                trace_callback=trace_callback,
-            )
+    def stream_callback(chunk: str) -> None:
+        output.append(chunk)
         refresh_status()
+
+    def trace_callback(event: TraceEvent) -> None:
+        trace_events.append(event)
+        refresh_status()
+
+    def tool_callback(phase: str, tool_name: str, _ok: bool) -> None:
+        nonlocal active_tool_name
+        if phase == "start":
+            active_tool_name = tool_name
+        elif phase == "finish" and active_tool_name == tool_name:
+            active_tool_name = None
+        refresh_status()
+
+    response = None
+    with console.status(status_text["value"], spinner="dots") as status:
+        def heartbeat() -> None:
+            while not stop_event.is_set():
+                refresh_status()
+                status.update(status_text["value"])
+                stop_event.wait(0.75)
+
+        heartbeat_thread = threading.Thread(target=heartbeat, name="vex-live-status", daemon=True)
+        heartbeat_thread.start()
+        try:
+            with contextlib.redirect_stdout(tool_logs), contextlib.redirect_stderr(tool_logs):
+                response = agent.run(
+                    command,
+                    stream_callback=stream_callback,
+                    tool_callback=tool_callback,
+                    trace_callback=trace_callback,
+                )
+        finally:
+            tool_logs.flush()
+            stop_event.set()
+            heartbeat_thread.join(timeout=1.5)
+            refresh_status()
+            status.update(status_text["value"])
+    if response is None:
+        raise AgentLoopError("The agent run did not return a response.")
     return response, trace_events
 
 
@@ -934,7 +988,7 @@ def auto_visuals(
         "auto",
         help="Preferred style pack: auto, editorial_clean, bold_tech, documentary_kinetic, product_ui, cinematic_night, signal_lab, or magazine_luxe.",
     ),
-    max_visuals: int = typer.Option(4, help="Maximum number of generated visuals to add."),
+    max_visuals: int = typer.Option(3, help="Maximum number of generated visuals to add."),
     min_visual_sec: float = typer.Option(1.4, help="Minimum duration of each generated visual."),
     max_visual_sec: float = typer.Option(3.6, help="Maximum duration of each generated visual."),
 ) -> None:

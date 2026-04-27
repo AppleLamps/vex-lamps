@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import shutil
 from pathlib import Path
+import uuid
 
 import config
 from broll_intelligence import ensure_writable_dir, safe_stem, writable_dir_candidates
@@ -34,6 +36,46 @@ def _load_manifest(path: str) -> dict[str, object] | None:
         return payload if isinstance(payload, dict) else None
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _working_file_fingerprint(path: str) -> dict[str, object]:
+    target = Path(str(path))
+    stat = target.stat()
+    return {
+        "path": str(target.resolve()),
+        "size_bytes": int(stat.st_size),
+        "mtime_ns": int(stat.st_mtime_ns),
+    }
+
+
+def _scene_cut_cache_path(state: ProjectState) -> Path:
+    return Path(state.working_dir) / "scene_cuts.auto_visuals.json"
+
+
+def _detect_scene_cuts_cached(state: ProjectState) -> list[float]:
+    cache_path = _scene_cut_cache_path(state)
+    fingerprint = _working_file_fingerprint(state.working_file)
+    if cache_path.is_file():
+        try:
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            payload = None
+        if isinstance(payload, dict) and payload.get("fingerprint") == fingerprint:
+            cached_cuts = payload.get("scene_cuts")
+            if isinstance(cached_cuts, list):
+                _emit_progress("Using cached scene cuts.")
+                return [round(float(item), 3) for item in cached_cuts]
+    scene_cuts = detect_scene_cuts(state.working_file)
+    payload = {
+        "created_at": utc_now_iso(),
+        "fingerprint": fingerprint,
+        "scene_cuts": scene_cuts,
+    }
+    try:
+        cache_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    return scene_cuts
 
 
 def _prior_auto_visual_card_ids(state: ProjectState) -> set[str]:
@@ -80,8 +122,9 @@ def _filter_previously_used_cards(
 
 
 def _refresh_existing_auto_visuals(state: ProjectState) -> int:
-    retained_timeline = [op for op in state.timeline if str(op.get("op") or "").strip() != "add_auto_visuals"]
-    removed_count = len(state.timeline) - len(retained_timeline)
+    original_timeline = list(state.timeline)
+    retained_timeline = [op for op in original_timeline if str(op.get("op") or "").strip() != "add_auto_visuals"]
+    removed_count = len(original_timeline) - len(retained_timeline)
     if removed_count <= 0:
         return 0
     state.timeline = retained_timeline
@@ -89,6 +132,30 @@ def _refresh_existing_auto_visuals(state: ProjectState) -> int:
     state.updated_at = utc_now_iso()
     if isinstance(state.artifacts, dict):
         state.artifacts.pop("latest_auto_visuals", None)
+    first_auto_index = next(
+        (index for index, op in enumerate(original_timeline) if str(op.get("op") or "").strip() == "add_auto_visuals"),
+        None,
+    )
+    trailing_only = first_auto_index is not None and all(
+        str(op.get("op") or "").strip() == "add_auto_visuals" for op in original_timeline[first_auto_index:]
+    )
+    if trailing_only:
+        if retained_timeline:
+            last_result = str(retained_timeline[-1].get("result_file") or "").strip()
+            if last_result and Path(last_result).is_file():
+                state.working_file = last_result
+                state.metadata = probe_video(last_result)
+                state.save()
+                return removed_count
+        if state.source_files:
+            source = Path(state.source_files[0])
+            if source.is_file():
+                reset_path = Path(state.working_dir) / f"{uuid.uuid4().hex}{source.suffix}"
+                shutil.copy2(source, reset_path)
+                state.working_file = str(reset_path)
+                state.metadata = probe_video(str(reset_path))
+                state.save()
+                return removed_count
     rebuild_timeline(state)
     return removed_count
 
@@ -195,7 +262,7 @@ def _render_generated_visual(
 
 
 def _max_render_workers(params: dict, visual_count: int) -> int:
-    requested = int(params.get("max_render_workers", 3) or 3)
+    requested = int(params.get("max_render_workers", 4) or 4)
     return max(1, min(requested, visual_count, 4))
 
 
@@ -206,7 +273,7 @@ def execute(params: dict, state: ProjectState) -> dict:
     renderer_name = str(params.get("renderer") or "auto").strip().lower()
     style_pack = str(params.get("style_pack") or "auto").strip().lower()
     refresh_existing = bool(params.get("refresh_existing", True))
-    max_visuals = max(1, min(int(params.get("max_visuals", 4) or 4), 6))
+    max_visuals = max(1, min(int(params.get("max_visuals", 3) or 3), 6))
     min_visual_sec = max(1.0, min(float(params.get("min_visual_sec", 1.4) or 1.4), 6.0))
     max_visual_sec = max(min_visual_sec, min(float(params.get("max_visual_sec", 3.6) or 3.6), 8.0))
 
@@ -236,7 +303,7 @@ def execute(params: dict, state: ProjectState) -> dict:
         sentence_segments = list(transcript_bundle.get("sentences") or [])
         blocked_ranges = state.replace_overlay_ranges()
         _emit_progress("Detecting safe scene cuts...")
-        scene_cuts = detect_scene_cuts(state.working_file)
+        scene_cuts = _detect_scene_cuts_cached(state)
         _emit_progress("Building visual candidate cards from the transcript...")
         cards = build_visual_context_cards(
             sentence_segments,

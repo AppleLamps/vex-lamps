@@ -473,8 +473,8 @@ class {scene_name}(Scene):
 """
 
 
-def _preview_dimensions(width: int, height: int) -> tuple[int, int]:
-    preview_width = min(width, 720)
+def _preview_dimensions(width: int, height: int, *, compact: bool = False) -> tuple[int, int]:
+    preview_width = min(width, 480 if compact else 640)
     preview_height = max(240, int(round(preview_width * (height / max(width, 1)))))
     if preview_height % 2 != 0:
         preview_height += 1
@@ -734,12 +734,22 @@ def _attempt_budget_for_brief(brief, spec: dict[str, Any]) -> int:
     return 1
 
 
-def _preview_render_budget(brief, fps: float) -> tuple[float, int]:
+def _use_compact_preview(brief, spec: dict[str, Any]) -> bool:
+    if str(spec.get("composition_mode") or "").strip().lower() == "picture_in_picture":
+        return True
+    if brief.animation_intensity == "low":
+        return True
+    return brief.scene_family in {"kinetic_quote", "kinetic_stack"} and float(spec.get("duration") or 0.0) <= 2.6
+
+
+def _preview_render_budget(brief, fps: float, *, compact: bool) -> tuple[float, int]:
+    if compact:
+        return min(fps, 12.0), 1
     if brief.animation_intensity == "low" and brief.camera_style == "composed":
-        return min(fps, 15.0), 1
+        return min(fps, 14.0), 1
     if brief.scene_family in {"kinetic_quote", "kinetic_stack"}:
-        return min(fps, 15.0), 1
-    return min(fps, 18.0), 2
+        return min(fps, 14.0), 1
+    return min(fps, 16.0), 2
 
 
 class ManimRenderer(VisualRenderer):
@@ -814,7 +824,8 @@ class ManimRenderer(VisualRenderer):
             forbidden_features={"DecimalNumber", "BarChart", "MathTex", "Tex", "Matrix", "Integer", "Variable"} if not latex_available else None,
         )
         attempt_budget = _attempt_budget_for_brief(brief, spec)
-        preview_fps, preview_frame_count = _preview_render_budget(brief, fps)
+        compact_preview = _use_compact_preview(brief, spec)
+        preview_fps, preview_frame_count = _preview_render_budget(brief, fps, compact=compact_preview)
         brief_path = job_dir / "scene_brief.json"
         brief_path.write_text(json.dumps(brief.to_dict(), indent=2), encoding="utf-8")
         attempts_root = job_dir / "attempts"
@@ -874,7 +885,7 @@ class ManimRenderer(VisualRenderer):
             scene_source = _scene_wrapper(candidate.scene_code, attempt_spec, brief.to_dict())
             script_path = attempt_dir / "generated_scene.py"
             script_path.write_text(scene_source, encoding="utf-8")
-            preview_width, preview_height = _preview_dimensions(width, height)
+            preview_width, preview_height = _preview_dimensions(width, height, compact=compact_preview)
             preview_media_dir = attempt_dir / "preview_media"
             try:
                 preview_video_path = _render_script(

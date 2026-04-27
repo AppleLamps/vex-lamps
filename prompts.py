@@ -325,7 +325,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
                 "max_visuals": {
                     "type": "integer",
-                    "description": "Maximum number of generated visuals to add. Default 4.",
+                    "description": "Maximum number of generated visuals to add. Default 3.",
                 },
                 "min_visual_sec": {
                     "type": "number",
