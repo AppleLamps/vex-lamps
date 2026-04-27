@@ -183,6 +183,7 @@ TRAILING_TRIM_WORDS = {"with", "by", "to", "for", "and", "or", "of", "in", "on",
 DISTILL_WORD_PATTERN = re.compile(r"[A-Za-z0-9%+.-]+(?:'[A-Za-z0-9%+.-]+)*")
 BACKGROUND_MOTIFS = ("grid", "rings", "beams", "constellation", "bands")
 PLAN_CACHE_VERSION = "2026-04-26-v3"
+MIN_PREMIUM_REPLACE_DURATION_SEC = 2.4
 LAYOUT_VARIANTS = {
     "data_journey": "arc_stage",
     "signal_network": "network_sweep",
@@ -828,6 +829,32 @@ def _snap_to_scene(
     return value
 
 
+def _expand_window_to_duration(
+    start_sec: float,
+    end_sec: float,
+    *,
+    clip_duration: float,
+    target_duration_sec: float,
+    scene_cuts: list[float],
+) -> tuple[float, float]:
+    current_duration = max(end_sec - start_sec, 0.0)
+    if target_duration_sec <= 0.0 or current_duration >= target_duration_sec:
+        return start_sec, end_sec
+    center = (start_sec + end_sec) / 2.0
+    expanded_start = max(0.0, center - target_duration_sec * 0.48)
+    expanded_end = min(clip_duration, center + target_duration_sec * 0.52)
+    if expanded_end - expanded_start < target_duration_sec:
+        shortfall = target_duration_sec - (expanded_end - expanded_start)
+        expanded_start = max(0.0, expanded_start - shortfall)
+        if expanded_end - expanded_start < target_duration_sec:
+            expanded_end = min(clip_duration, expanded_end + (target_duration_sec - (expanded_end - expanded_start)))
+    snapped_start = _snap_to_scene(expanded_start, scene_cuts, max_distance=0.7, direction="backward")
+    snapped_end = _snap_to_scene(expanded_end, scene_cuts, max_distance=0.7, direction="forward")
+    if snapped_end - snapped_start >= max(target_duration_sec * 0.84, current_duration):
+        return max(0.0, snapped_start), min(clip_duration, snapped_end)
+    return max(0.0, expanded_start), min(clip_duration, expanded_end)
+
+
 def _extract_emphasis_text(card: dict[str, Any]) -> str:
     text = str(card.get("sentence_text") or "")
     number_match = re.search(r"\b\d+(?:\.\d+)?(?:%|x)?\b", text, flags=re.IGNORECASE)
@@ -905,6 +932,18 @@ def _normalize_visual_plan(
             composition_mode = "picture_in_picture"
         if composition_mode not in {"replace", "picture_in_picture"}:
             composition_mode = card["suggested_composition"]
+        minimum_duration = min_visual_sec
+        if composition_mode == "replace":
+            minimum_duration = max(minimum_duration, MIN_PREMIUM_REPLACE_DURATION_SEC)
+        start_sec, end_sec = _expand_window_to_duration(
+            start_sec,
+            end_sec,
+            clip_duration=clip_duration,
+            target_duration_sec=min(minimum_duration, max_visual_sec),
+            scene_cuts=scene_cuts,
+        )
+        if end_sec - start_sec < minimum_duration:
+            continue
         if composition_mode == "picture_in_picture":
             template = EDITORIAL_TEMPLATE_DOWNGRADES.get(template, template)
         template = _upgrade_to_premium_template(card, template, composition_mode)
@@ -912,16 +951,26 @@ def _normalize_visual_plan(
         if position not in {"top_left", "top_right", "bottom_left", "bottom_right", "top", "bottom", "center"}:
             position = "bottom_right"
         scale = round(max(0.24, min(float(item.get("scale", 0.42) or 0.42), 0.8)), 3)
+        slot_duration = end_sec - start_sec
+        short_slot = slot_duration <= 2.8
         supporting_lines = _coerce_string_list(item.get("supporting_lines"), limit=3, max_chars=72)
         keywords = _coerce_string_list(item.get("keywords"), limit=4, max_chars=28)
         steps = _coerce_string_list(item.get("steps"), limit=4, max_chars=28)
         derived_headline = _headline_from_card(card)
-        headline = _polish_visual_copy(item.get("headline") or derived_headline or card["sentence_text"], max_words=6, max_chars=48)
+        headline = _polish_visual_copy(
+            item.get("headline") or derived_headline or card["sentence_text"],
+            max_words=5 if short_slot else 6,
+            max_chars=38 if short_slot else 48,
+        )
         if headline.lower() == str(card.get("sentence_text") or "").strip().lower() or len(headline.split()) > 8:
             headline = derived_headline or truncate(headline, 42)
         emphasis_source = str(item.get("emphasis_text") or _extract_emphasis_text(card))
         emphasis_text = emphasis_source if re.fullmatch(r"\d+(?:\.\d+)?(?:%|x)?", emphasis_source, flags=re.IGNORECASE) else _polish_visual_copy(emphasis_source, max_words=4, max_chars=34)
-        footer_text = _polish_visual_copy(item.get("footer_text") or _deck_for_card(card, headline) or card["context_text"], max_words=8, max_chars=58)
+        footer_text = _polish_visual_copy(
+            item.get("footer_text") or _deck_for_card(card, headline) or card["context_text"],
+            max_words=6 if short_slot else 8,
+            max_chars=42 if short_slot else 58,
+        )
         style_pack = str(item.get("style_pack") or card["style_pack"] or "editorial_clean").strip().lower()
         if style_pack not in STYLE_PACKS:
             style_pack = card["style_pack"]
@@ -939,7 +988,11 @@ def _normalize_visual_plan(
             32,
         )
         eyebrow = truncate(str(item.get("eyebrow") or _eyebrow_for_card(card, template)), 18).upper()
-        deck = _polish_visual_copy(item.get("deck") or _deck_for_card(card, headline), max_words=8, max_chars=50)
+        deck = _polish_visual_copy(
+            item.get("deck") or _deck_for_card(card, headline),
+            max_words=6 if short_slot else 8,
+            max_chars=36 if short_slot else 50,
+        )
         background_motif = str(item.get("background_motif") or _background_motif(card, template, style_pack)).strip().lower()
         if background_motif not in BACKGROUND_MOTIFS:
             background_motif = _background_motif(card, template, style_pack)
@@ -1002,6 +1055,10 @@ def _normalize_visual_plan(
             spec["steps"] = _steps_for_card(card) or ([headline, emphasis_text, footer_text[:28]] if footer_text else [headline, emphasis_text])[:4]
         if template in {"metric_callout", "stat_grid", "data_journey"} and not supporting_lines:
             spec["supporting_lines"] = _supporting_lines_for_card(card)[:3]
+        if short_slot:
+            spec["supporting_lines"] = list(spec.get("supporting_lines") or [])[:2]
+            spec["steps"] = list(spec.get("steps") or [])[:3]
+            spec["quote_text"] = _polish_visual_copy(spec.get("quote_text") or headline, max_words=8, max_chars=58)
         if template in {"comparison_split", "spotlight_compare"}:
             left_label, right_label, left_detail, right_detail = _comparison_terms_for_card(card)
             spec["left_label"] = truncate(str(item.get("left_label") or left_label), 28)
@@ -1133,6 +1190,34 @@ def fallback_visual_plan(
     )
 
 
+def _backfill_plan_with_fallback(
+    primary: list[dict[str, Any]],
+    fallback: list[dict[str, Any]],
+    *,
+    max_visuals: int,
+) -> list[dict[str, Any]]:
+    merged = list(primary)
+    seen_card_ids = {str(item.get("card_id") or "") for item in merged}
+    for candidate in fallback:
+        if len(merged) >= max_visuals:
+            break
+        card_id = str(candidate.get("card_id") or "")
+        if card_id and card_id in seen_card_ids:
+            continue
+        start_sec = float(candidate.get("start") or 0.0)
+        end_sec = float(candidate.get("end") or start_sec)
+        if any(
+            abs(start_sec - float(existing.get("start") or 0.0)) < 0.35
+            or not (end_sec <= float(existing.get("start") or 0.0) - 0.12 or start_sec >= float(existing.get("end") or 0.0) + 0.12)
+            for existing in merged
+        ):
+            continue
+        merged.append(candidate)
+        if card_id:
+            seen_card_ids.add(card_id)
+    return sorted(merged, key=lambda item: float(item.get("start") or 0.0))[:max_visuals]
+
+
 def analyze_visual_plan_with_llm(
     provider_name: str,
     model_name: str,
@@ -1212,6 +1297,7 @@ def analyze_visual_plan_with_llm(
     )
     if not normalized_director:
         return fallback
+    normalized_director = _backfill_plan_with_fallback(normalized_director, fallback, max_visuals=max_visuals)
     if not _should_run_critic(normalized_director):
         return normalized_director or fallback
 
@@ -1245,6 +1331,8 @@ def analyze_visual_plan_with_llm(
             scene_cuts,
             available_renderers,
         )
+        if normalized_critic:
+            normalized_critic = _backfill_plan_with_fallback(normalized_critic, fallback, max_visuals=max_visuals)
         return normalized_critic or normalized_director or fallback
     except Exception:
         return normalized_director or fallback

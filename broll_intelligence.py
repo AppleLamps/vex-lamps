@@ -102,6 +102,7 @@ def extract_json_object(raw_text: str) -> str:
 
 
 def call_reasoning_model(provider_name: str, model_name: str, system_prompt: str, user_prompt: str) -> str:
+    config.configure_runtime_logging()
     if provider_name == "claude":
         from anthropic import Anthropic
 

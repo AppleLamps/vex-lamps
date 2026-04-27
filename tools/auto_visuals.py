@@ -153,7 +153,7 @@ def _delegate_stock_fallback(params: dict, state: ProjectState, reason: str) -> 
     result = pexels_broll.execute(
         {
             "max_overlays": params.get("max_visuals", 4),
-            "min_overlay_sec": params.get("min_visual_sec", 1.4),
+            "min_overlay_sec": params.get("min_visual_sec", 2.2),
             "max_overlay_sec": params.get("max_visual_sec", 3.6),
         },
         state,
@@ -238,7 +238,7 @@ def execute(params: dict, state: ProjectState) -> dict:
     style_pack = str(params.get("style_pack") or "auto").strip().lower()
     refresh_existing = bool(params.get("refresh_existing", True))
     max_visuals = max(1, min(int(params.get("max_visuals", 3) or 3), 6))
-    min_visual_sec = max(1.0, min(float(params.get("min_visual_sec", 1.4) or 1.4), 6.0))
+    min_visual_sec = max(1.6, min(float(params.get("min_visual_sec", 2.2) or 2.2), 6.0))
     max_visual_sec = max(min_visual_sec, min(float(params.get("max_visual_sec", 3.6) or 3.6), 8.0))
 
     if mode == "stock_only":

@@ -806,6 +806,10 @@ def _history_roots(spec: dict[str, Any]) -> list[Path]:
 
 
 def _example_limit_for_brief(brief) -> int:
+    if float(getattr(brief, "duration_sec", 0.0) or 0.0) <= 3.8:
+        if brief.scene_family in {"kinetic_quote", "kinetic_stack"}:
+            return 1
+        return 2
     if brief.animation_intensity == "low":
         return 1
     if brief.scene_family in {"kinetic_quote", "kinetic_stack", "dashboard_build"}:
@@ -818,6 +822,15 @@ def _example_limit_for_brief(brief) -> int:
 def _attempt_budget_for_brief(brief, spec: dict[str, Any]) -> int:
     model_name = str(spec.get("generation_model") or "").strip().lower()
     if model_name.startswith("gemma"):
+        if (
+            str(spec.get("composition_mode") or "").strip().lower() == "replace"
+            and (
+                float(spec.get("importance") or 0.0) >= 0.62
+                or float(spec.get("duration") or 0.0) <= 3.8
+                or brief.scene_family in {"metric_story", "comparison_morph", "kinetic_quote", "system_map"}
+            )
+        ):
+            return 2
         return 1
     importance = float(spec.get("importance") or 0.0)
     template = str(spec.get("template") or "")
@@ -846,6 +859,27 @@ def _preview_render_budget(brief, fps: float, *, compact: bool) -> tuple[float, 
     if brief.scene_family in {"kinetic_quote", "kinetic_stack"}:
         return min(fps, 14.0), 1
     return min(fps, 16.0), 2
+
+
+def _is_request_timeout_error(message: str) -> bool:
+    cleaned = str(message or "").upper()
+    return "DEADLINE_EXCEEDED" in cleaned or "TIMEOUT" in cleaned or "TIMED OUT" in cleaned
+
+
+def _should_use_compact_retry(
+    brief,
+    *,
+    attempt_index: int,
+    previous_code: str | None,
+    feedback_lines: list[str] | None,
+) -> bool:
+    if attempt_index <= 1:
+        return False
+    if previous_code:
+        return float(getattr(brief, "duration_sec", 0.0) or 0.0) <= 3.8
+    if not feedback_lines:
+        return False
+    return any(_is_request_timeout_error(item) for item in feedback_lines)
 
 
 def _should_try_generated_scene(spec: dict[str, Any], brief) -> bool:
@@ -948,6 +982,7 @@ class ManimRenderer(VisualRenderer):
             preferred_tags=selected_blueprint.prompt_terms(),
             preferred_features=selected_blueprint.suggested_features,
         )
+        full_examples = list(examples)
         attempt_budget = _attempt_budget_for_brief(brief, spec)
         compact_preview = _use_compact_preview(brief, spec)
         preview_fps, preview_frame_count = _preview_render_budget(brief, fps, compact=compact_preview)
@@ -958,6 +993,7 @@ class ManimRenderer(VisualRenderer):
         attempts: list[dict[str, Any]] = []
         previous_code: str | None = None
         feedback_lines: list[str] | None = None
+        last_request_error: str | None = None
         chosen_scene_source: str | None = None
         chosen_candidate = None
         chosen_quality: dict[str, Any] | None = None
@@ -965,27 +1001,49 @@ class ManimRenderer(VisualRenderer):
         for attempt_index in range(1, attempt_budget + 1):
             attempt_dir = attempts_root / f"attempt_{attempt_index:02d}"
             attempt_dir.mkdir(parents=True, exist_ok=True)
+            compact_retry = _should_use_compact_retry(
+                brief,
+                attempt_index=attempt_index,
+                previous_code=previous_code,
+                feedback_lines=feedback_lines,
+            )
+            active_blueprint = (
+                blueprint_candidates[min(attempt_index - 1, len(blueprint_candidates) - 1)]
+                if compact_retry and not previous_code and len(blueprint_candidates) > 1
+                else selected_blueprint
+            )
+            active_examples = (
+                list(full_examples[:1])
+                if compact_retry and full_examples
+                else list(full_examples)
+            )
             _emit_render_progress(
                 f"{spec.get('visual_id', 'visual')}: generation attempt {attempt_index}/{attempt_budget}"
             )
             try:
-                _emit_render_progress(f"{spec.get('visual_id', 'visual')}: requesting scene code from {provider_name}/{model_name}")
+                retry_suffix = " (compact retry)" if compact_retry else ""
+                _emit_render_progress(
+                    f"{spec.get('visual_id', 'visual')}: requesting scene code from {provider_name}/{model_name}{retry_suffix}"
+                )
                 candidate = request_scene_candidate(
                     provider_name,
                     model_name,
                     brief,
-                    examples,
-                    selected_blueprint,
-                    alternative_blueprints=blueprint_candidates[1:3],
+                    active_examples,
+                    active_blueprint,
+                    alternative_blueprints=[item for item in blueprint_candidates if item.blueprint_id != active_blueprint.blueprint_id][:2],
                     previous_code=previous_code,
                     feedback_lines=feedback_lines,
                 )
+                last_request_error = None
             except Exception as exc:
+                last_request_error = str(exc)
                 attempts.append(
                     {
                         "attempt": attempt_index,
-                        "blueprint_id": selected_blueprint.blueprint_id,
-                        "blueprint_archetype": selected_blueprint.archetype,
+                        "blueprint_id": active_blueprint.blueprint_id,
+                        "blueprint_archetype": active_blueprint.archetype,
+                        "compact_retry": compact_retry,
                         "request_error": str(exc),
                     }
                 )
@@ -996,8 +1054,9 @@ class ManimRenderer(VisualRenderer):
             validation = validate_generated_scene_code(candidate.scene_code, latex_available=latex_available, brief=brief)
             attempt_record: dict[str, Any] = {
                 "attempt": attempt_index,
-                "blueprint_id": selected_blueprint.blueprint_id,
-                "blueprint_archetype": selected_blueprint.archetype,
+                "blueprint_id": active_blueprint.blueprint_id,
+                "blueprint_archetype": active_blueprint.archetype,
+                "compact_retry": compact_retry,
                 "summary": candidate.summary,
                 "features": list(candidate.features),
                 "validation": validation.to_dict(),
@@ -1086,7 +1145,7 @@ class ManimRenderer(VisualRenderer):
             brief=brief,
             blueprint_candidates=blueprint_candidates,
             selected_blueprint=selected_blueprint,
-            selected_examples=examples,
+            selected_examples=full_examples,
             attempts=attempts,
             final_candidate=chosen_candidate,
             final_scene_code=chosen_candidate.scene_code if chosen_candidate else None,

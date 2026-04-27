@@ -388,6 +388,8 @@ def request_scene_candidate(
     feedback_lines: list[str] | None = None,
 ) -> SceneCandidate:
     skill_limit = 2 if brief.animation_intensity == "low" else 4
+    if float(getattr(brief, "duration_sec", 0.0) or 0.0) <= 3.8:
+        skill_limit = min(skill_limit, 3)
     if brief.scene_family in {"kinetic_quote", "kinetic_stack", "dashboard_build"}:
         skill_limit = min(skill_limit, 3)
     skills = retrieve_skill_slices(
