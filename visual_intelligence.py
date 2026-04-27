@@ -1073,6 +1073,15 @@ def _normalize_visual_plan(
     return normalized
 
 
+def _resequence_visual_ids(plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    resequenced: list[dict[str, Any]] = []
+    for index, item in enumerate(plan, start=1):
+        normalized = dict(item)
+        normalized["visual_id"] = f"visual_{index:03d}"
+        resequenced.append(normalized)
+    return resequenced
+
+
 def _candidate_pool(cards: list[dict[str, Any]], max_visuals: int) -> list[dict[str, Any]]:
     ranked = sorted(cards, key=lambda item: (item["priority"], -item["start"]), reverse=True)
     pool: list[dict[str, Any]] = []
@@ -1178,15 +1187,17 @@ def fallback_visual_plan(
         )
         if len(fallback) >= max_visuals:
             break
-    return _normalize_visual_plan(
-        fallback,
-        cards,
-        clip_duration,
-        max_visuals,
-        min_visual_sec,
-        max_visual_sec,
-        scene_cuts,
-        available_renderers,
+    return _resequence_visual_ids(
+        _normalize_visual_plan(
+            fallback,
+            cards,
+            clip_duration,
+            max_visuals,
+            min_visual_sec,
+            max_visual_sec,
+            scene_cuts,
+            available_renderers,
+        )
     )
 
 
@@ -1215,7 +1226,8 @@ def _backfill_plan_with_fallback(
         merged.append(candidate)
         if card_id:
             seen_card_ids.add(card_id)
-    return sorted(merged, key=lambda item: float(item.get("start") or 0.0))[:max_visuals]
+    merged = sorted(merged, key=lambda item: float(item.get("start") or 0.0))[:max_visuals]
+    return _resequence_visual_ids(merged)
 
 
 def analyze_visual_plan_with_llm(
@@ -1299,7 +1311,7 @@ def analyze_visual_plan_with_llm(
         return fallback
     normalized_director = _backfill_plan_with_fallback(normalized_director, fallback, max_visuals=max_visuals)
     if not _should_run_critic(normalized_director):
-        return normalized_director or fallback
+        return _resequence_visual_ids(normalized_director or fallback)
 
     critic_system_prompt = (
         "You are a strict motion-design critic and QA lead. "
@@ -1333,6 +1345,6 @@ def analyze_visual_plan_with_llm(
         )
         if normalized_critic:
             normalized_critic = _backfill_plan_with_fallback(normalized_critic, fallback, max_visuals=max_visuals)
-        return normalized_critic or normalized_director or fallback
+        return _resequence_visual_ids(normalized_critic or normalized_director or fallback)
     except Exception:
-        return normalized_director or fallback
+        return _resequence_visual_ids(normalized_director or fallback)

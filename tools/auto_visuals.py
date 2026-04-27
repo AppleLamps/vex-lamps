@@ -193,6 +193,15 @@ def _prepare_visual_spec(
     return prepared
 
 
+def _ensure_unique_visual_ids(specs: list[dict[str, object]]) -> list[dict[str, object]]:
+    normalized_specs: list[dict[str, object]] = []
+    for index, spec in enumerate(specs, start=1):
+        normalized = dict(spec)
+        normalized["visual_id"] = f"visual_{index:03d}"
+        normalized_specs.append(normalized)
+    return normalized_specs
+
+
 def _render_generated_visual(
     spec: dict[str, object],
     *,
@@ -313,6 +322,7 @@ def execute(params: dict, state: ProjectState) -> dict:
             blocked_ranges,
             min_duration_sec=min_visual_sec,
         )
+        plan = _ensure_unique_visual_ids([dict(item) for item in plan])
         if not plan:
             return {
                 "success": False,
