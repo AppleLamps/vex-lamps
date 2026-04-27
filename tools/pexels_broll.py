@@ -24,6 +24,7 @@ from engine import VideoEngineError, apply_b_roll_overlays, probe_video
 from state import ProjectState, restrict_timed_items_to_available_ranges, utc_now_iso
 from tools.transcript import execute as transcribe
 from tools.transcript_utils import parse_srt
+from tools.undo import refresh_generated_overlay_ops
 
 
 def _ensure_transcript_segments(state: ProjectState) -> tuple[Path, list[dict[str, float | str]]]:
@@ -36,6 +37,13 @@ def _ensure_transcript_segments(state: ProjectState) -> tuple[Path, list[dict[st
     if not segments:
         raise RuntimeError("Transcript was empty, so Vex could not plan B-roll beats.")
     return srt_path, segments
+
+
+def _refresh_existing_auto_broll(state: ProjectState) -> dict[str, int]:
+    return refresh_generated_overlay_ops(
+        state,
+        remove_ops={"add_auto_broll"},
+    )
 
 
 def execute(params: dict, state: ProjectState) -> dict:
@@ -53,6 +61,9 @@ def execute(params: dict, state: ProjectState) -> dict:
     max_overlay_sec = max(min_overlay_sec, min(float(params.get("max_overlay_sec", 2.8) or 2.8), 8.0))
 
     try:
+        refreshed_counts: dict[str, int] = {}
+        if bool(params.get("refresh_existing", True)):
+            refreshed_counts = _refresh_existing_auto_broll(state)
         srt_path, transcript_segments = _ensure_transcript_segments(state)
         metadata = state.metadata or probe_video(state.working_file)
         clip_duration = float(metadata.get("duration_sec") or 0.0)
@@ -71,6 +82,12 @@ def execute(params: dict, state: ProjectState) -> dict:
         )
         if not cards:
             raise RuntimeError("No subtitle-aligned transcript cards were available for B-roll planning after respecting existing full-screen overlay windows.")
+        if refreshed_counts.get("add_auto_broll"):
+            count = refreshed_counts["add_auto_broll"]
+            print(
+                f"[auto_broll] Cleared {count} prior auto B-roll pass{'es' if count != 1 else ''} before replanning.",
+                flush=True,
+            )
         plan = analyze_broll_plan_with_llm(
             provider_name=provider_name,
             model_name=model_name,

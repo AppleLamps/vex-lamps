@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
-import shutil
 from pathlib import Path
-import uuid
 
 import config
 from broll_intelligence import ensure_writable_dir, safe_stem, writable_dir_candidates
@@ -13,7 +11,7 @@ from renderers import VisualRendererError, renderer_capabilities, resolve_render
 from state import ProjectState, restrict_timed_items_to_available_ranges, utc_now_iso
 from tools.transcript import execute as transcribe
 from tools.transcript_utils import load_transcript_bundle
-from tools.undo import rebuild_timeline
+from tools.undo import refresh_generated_overlay_ops
 from visual_intelligence import (
     STYLE_PACKS,
     THEME_BY_VISUAL_TYPE,
@@ -121,43 +119,11 @@ def _filter_previously_used_cards(
     return list(cards)
 
 
-def _refresh_existing_auto_visuals(state: ProjectState) -> int:
-    original_timeline = list(state.timeline)
-    retained_timeline = [op for op in original_timeline if str(op.get("op") or "").strip() != "add_auto_visuals"]
-    removed_count = len(original_timeline) - len(retained_timeline)
-    if removed_count <= 0:
-        return 0
-    state.timeline = retained_timeline
-    state.redo_stack.clear()
-    state.updated_at = utc_now_iso()
-    if isinstance(state.artifacts, dict):
-        state.artifacts.pop("latest_auto_visuals", None)
-    first_auto_index = next(
-        (index for index, op in enumerate(original_timeline) if str(op.get("op") or "").strip() == "add_auto_visuals"),
-        None,
+def _refresh_existing_auto_overlays(state: ProjectState) -> dict[str, int]:
+    return refresh_generated_overlay_ops(
+        state,
+        remove_ops={"add_auto_visuals", "add_auto_broll"},
     )
-    trailing_only = first_auto_index is not None and all(
-        str(op.get("op") or "").strip() == "add_auto_visuals" for op in original_timeline[first_auto_index:]
-    )
-    if trailing_only:
-        if retained_timeline:
-            last_result = str(retained_timeline[-1].get("result_file") or "").strip()
-            if last_result and Path(last_result).is_file():
-                state.working_file = last_result
-                state.metadata = probe_video(last_result)
-                state.save()
-                return removed_count
-        if state.source_files:
-            source = Path(state.source_files[0])
-            if source.is_file():
-                reset_path = Path(state.working_dir) / f"{uuid.uuid4().hex}{source.suffix}"
-                shutil.copy2(source, reset_path)
-                state.working_file = str(reset_path)
-                state.metadata = probe_video(str(reset_path))
-                state.save()
-                return removed_count
-    rebuild_timeline(state)
-    return removed_count
 
 
 def _ensure_transcript_bundle(state: ProjectState) -> dict[str, object]:
@@ -281,13 +247,18 @@ def execute(params: dict, state: ProjectState) -> dict:
         return _delegate_stock_fallback(params, state, "Auto visuals was asked to use stock-only mode.")
 
     try:
-        refreshed_auto_visual_passes = 0
+        refreshed_auto_overlay_counts: dict[str, int] = {}
         if refresh_existing:
-            refreshed_auto_visual_passes = _refresh_existing_auto_visuals(state)
-            if refreshed_auto_visual_passes:
-                _emit_progress(
-                    f"Refreshed {refreshed_auto_visual_passes} prior auto-visual pass{'es' if refreshed_auto_visual_passes != 1 else ''} before replanning."
-                )
+            refreshed_auto_overlay_counts = _refresh_existing_auto_overlays(state)
+            if refreshed_auto_overlay_counts:
+                details = []
+                if refreshed_auto_overlay_counts.get("add_auto_visuals"):
+                    count = refreshed_auto_overlay_counts["add_auto_visuals"]
+                    details.append(f"{count} auto-visual pass{'es' if count != 1 else ''}")
+                if refreshed_auto_overlay_counts.get("add_auto_broll"):
+                    count = refreshed_auto_overlay_counts["add_auto_broll"]
+                    details.append(f"{count} auto B-roll pass{'es' if count != 1 else ''}")
+                _emit_progress(f"Cleared prior auto overlays before replanning: {', '.join(details)}.")
         _emit_progress("Loading transcript bundle...")
         transcript_bundle = _ensure_transcript_bundle(state)
         metadata = state.metadata or probe_video(state.working_file)
@@ -317,7 +288,7 @@ def execute(params: dict, state: ProjectState) -> dict:
             blocked_ranges,
             min_duration_sec=max(0.45, min_visual_sec * 0.5),
         )
-        if not refreshed_auto_visual_passes:
+        if not refreshed_auto_overlay_counts:
             prior_card_ids = _prior_auto_visual_card_ids(state)
             cards = _filter_previously_used_cards(cards, prior_card_ids, max_visuals=max_visuals)
         if not cards:
