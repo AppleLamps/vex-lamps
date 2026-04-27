@@ -123,7 +123,10 @@ class VexGeneratedScene(MovingCameraScene):
         )
 
     def play(self, *args: Any, **kwargs: Any) -> Any:
-        return super().play(*args, **kwargs)
+        self._apply_layout_guardrails(reason="pre_play")
+        result = super().play(*args, **kwargs)
+        self._apply_layout_guardrails(reason="post_play")
+        return result
 
     def wait(self, *args: Any, **kwargs: Any) -> Any:
         self._apply_layout_guardrails(reason="pre_wait")
@@ -660,7 +663,30 @@ class VexGeneratedScene(MovingCameraScene):
             except (TypeError, ValueError):
                 pass
         focus_target = center if center is not None else target
-        return self.camera.frame.animate.scale(scale).move_to(focus_target).set_run_time(run_time)
+        desired_x, desired_y = self._focus_point(focus_target)
+        guarded_x, guarded_y, guarded_scale = self._guarded_camera_focus(
+            desired_x=desired_x,
+            desired_y=desired_y,
+            scale=scale,
+        )
+        if (
+            abs(guarded_x - desired_x) > 1e-4
+            or abs(guarded_y - desired_y) > 1e-4
+            or abs(guarded_scale - scale) > 1e-4
+        ):
+            self._record_guardrail_action(
+                "camera_focus_guardrail",
+                "camera",
+                requested_x=round(desired_x, 4),
+                requested_y=round(desired_y, 4),
+                applied_x=round(guarded_x, 4),
+                applied_y=round(guarded_y, 4),
+                requested_scale=round(scale, 4),
+                applied_scale=round(guarded_scale, 4),
+            )
+        return self.camera.frame.animate.scale(guarded_scale).move_to(
+            [guarded_x, guarded_y, 0.0]
+        ).set_run_time(run_time)
 
     def stagger_fade_in(self, items: list[Any], *, shift=UP * 0.12, lag_ratio: float = 0.12) -> Animation:
         from manim import LaggedStart
@@ -683,7 +709,9 @@ class VexGeneratedScene(MovingCameraScene):
         unique_name = base if count == 1 else f"{base}_{count}"
         normalized_role = str(role or "group")
         lowered_name = unique_name.lower()
-        if normalized_role == "metric":
+        if any(token in lowered_name for token in ("title", "headline", "header", "eyebrow")):
+            normalized_role = "title"
+        elif normalized_role == "metric":
             if any(token in lowered_name for token in ("title", "headline", "header")):
                 normalized_role = "title"
             elif any(token in lowered_name for token in ("verdict", "takeaway", "lesson", "thesis")):
@@ -858,6 +886,26 @@ class VexGeneratedScene(MovingCameraScene):
             "center_y": (top + bottom) / 2,
         }
 
+    def _merged_box(self, boxes: list[dict[str, float]]) -> dict[str, float] | None:
+        if not boxes:
+            return None
+        left = min(float(box["left"]) for box in boxes)
+        right = max(float(box["right"]) for box in boxes)
+        top = max(float(box["top"]) for box in boxes)
+        bottom = min(float(box["bottom"]) for box in boxes)
+        width = max(right - left, 0.0)
+        height = max(top - bottom, 0.0)
+        return {
+            "left": left,
+            "right": right,
+            "top": top,
+            "bottom": bottom,
+            "width": width,
+            "height": height,
+            "center_x": (left + right) / 2,
+            "center_y": (top + bottom) / 2,
+        }
+
     def _text_bbox(self, mob: Any) -> dict[str, float] | None:
         return self._combined_bbox(self._text_leaves(mob))
 
@@ -889,6 +937,80 @@ class VexGeneratedScene(MovingCameraScene):
 
     def _active_layout_entries(self) -> list[dict[str, Any]]:
         return list(self._layout_registry or self._top_level_entries())
+
+    def _focus_point(self, target: Any) -> tuple[float, float]:
+        if hasattr(target, "get_center"):
+            center = target.get_center()
+            return float(center[0]), float(center[1])
+        try:
+            return float(target[0]), float(target[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            return 0.0, 0.0
+
+    def _camera_preserve_entries(self) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        for entry in self._active_layout_entries():
+            mob = entry["mob"]
+            if float(getattr(mob, "width", 0.0) or 0.0) <= 0.01 or float(getattr(mob, "height", 0.0) or 0.0) <= 0.01:
+                continue
+            if self._is_connector_like(mob):
+                continue
+            role = str(entry.get("role") or "")
+            if self._is_text_based(mob) or role in {"hero", "title", "before", "after", "metric", "support", "quote", "label", "footer"}:
+                entries.append(entry)
+        return entries
+
+    def _camera_preserve_box(self, entry: dict[str, Any]) -> dict[str, float] | None:
+        mob = entry["mob"]
+        return self._text_bbox(mob) or self._bbox(mob)
+
+    def _guarded_camera_focus(
+        self,
+        *,
+        desired_x: float,
+        desired_y: float,
+        scale: float,
+    ) -> tuple[float, float, float]:
+        entries = self._camera_preserve_entries()
+        if not entries:
+            return desired_x, desired_y, float(scale)
+        preserve_boxes = [box for box in (self._camera_preserve_box(entry) for entry in entries) if box is not None]
+        union_box = self._merged_box(preserve_boxes)
+        if union_box is None:
+            return desired_x, desired_y, float(scale)
+
+        frame_bounds = self._frame_bounds()
+        base_width = float(frame_bounds["width"])
+        base_height = float(frame_bounds["height"])
+        guarded_scale = float(scale)
+        required_width = union_box["width"] + base_width * 0.08
+        required_height = union_box["height"] + base_height * 0.22
+        guarded_scale = max(
+            guarded_scale,
+            required_width / max(base_width, 1e-6),
+            required_height / max(base_height, 1e-6),
+        )
+        guarded_scale = min(max(guarded_scale, 0.82), 1.14)
+
+        focus_width = base_width * guarded_scale
+        focus_height = base_height * guarded_scale
+        margin_x = max(focus_width * 0.04, 0.18)
+        margin_top = max(focus_height * 0.05, 0.16)
+        margin_bottom = max(focus_height * 0.17, 0.24)
+        min_center_x = union_box["right"] + margin_x - focus_width / 2
+        max_center_x = union_box["left"] - margin_x + focus_width / 2
+        min_center_y = union_box["top"] + margin_top - focus_height / 2
+        max_center_y = union_box["bottom"] - margin_bottom + focus_height / 2
+
+        if min_center_x > max_center_x:
+            guarded_x = union_box["center_x"]
+        else:
+            guarded_x = min(max(desired_x, min_center_x), max_center_x)
+        if min_center_y > max_center_y:
+            guarded_y = union_box["center_y"]
+        else:
+            guarded_y = min(max(desired_y, min_center_y), max_center_y)
+        return guarded_x, guarded_y, guarded_scale
 
     def _bbox(self, mob: Any) -> dict[str, float]:
         return {
