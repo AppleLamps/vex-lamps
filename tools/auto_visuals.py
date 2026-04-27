@@ -185,13 +185,11 @@ def _prepare_visual_spec(
     style_pack: str,
     provider_name: str,
     model_name: str,
-    bundle_root: Path,
 ) -> dict[str, object]:
     prepared = dict(spec)
     _apply_style_override(prepared, style_pack)
     prepared["generation_provider"] = provider_name
     prepared["generation_model"] = model_name
-    prepared["scene_library_roots"] = [str(bundle_root)]
     return prepared
 
 
@@ -337,7 +335,6 @@ def execute(params: dict, state: ProjectState) -> dict:
                 style_pack=style_pack,
                 provider_name=provider_name,
                 model_name=model_name,
-                bundle_root=bundle_root,
             )
             for spec in plan
         ]

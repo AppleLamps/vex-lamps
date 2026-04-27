@@ -364,6 +364,24 @@ def _normalized_history_roots(history_roots: Iterable[Path]) -> tuple[str, ...]:
     return tuple(sorted(normalized))
 
 
+def _history_scene_is_reusable(payload: dict[str, Any]) -> bool:
+    if bool(payload.get("fallback_used")):
+        return False
+    quality_score = payload.get("quality_score")
+    try:
+        quality_value = float(quality_score)
+    except (TypeError, ValueError):
+        return False
+    if quality_value < 0.9:
+        return False
+    scene_code = str(payload.get("final_scene_code") or "").strip()
+    if not scene_code:
+        return False
+    if scene_code.count("make_glass_panel") + scene_code.count("RoundedRectangle(") >= 4:
+        return False
+    return True
+
+
 @lru_cache(maxsize=12)
 def _history_examples_cached(history_roots: tuple[str, ...]) -> tuple[SceneExample, ...]:
     examples: list[SceneExample] = []
@@ -382,10 +400,10 @@ def _history_examples_cached(history_roots: tuple[str, ...]) -> tuple[SceneExamp
                 payload = json.loads(report_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
+            if not isinstance(payload, dict) or not _history_scene_is_reusable(payload):
+                continue
             brief = payload.get("scene_brief") or {}
             scene_code = str(payload.get("final_scene_code") or "").strip()
-            if not scene_code:
-                continue
             examples.append(
                 SceneExample(
                     example_id=f"history::{report_path.parent.name}",

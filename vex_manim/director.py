@@ -109,6 +109,9 @@ UNSUPPORTED_ANIMATION_KWARGS = {
     "stroke_opacity",
 }
 
+POINT_LITERAL_NAMES = {"UP", "DOWN", "LEFT", "RIGHT", "ORIGIN", "UL", "UR", "DL", "DR"}
+POINT_FUNCTION_NAMES = {"interpolate", "midpoint"}
+
 
 def _call_name(node: ast.AST) -> str:
     if isinstance(node, ast.Name):
@@ -117,6 +120,41 @@ def _call_name(node: ast.AST) -> str:
         left = _call_name(node.value)
         return f"{left}.{node.attr}" if left else node.attr
     return ""
+
+
+def _is_numeric_expr(node: ast.AST) -> bool:
+    if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+        return True
+    if isinstance(node, ast.UnaryOp):
+        return _is_numeric_expr(node.operand)
+    if isinstance(node, ast.BinOp):
+        return _is_numeric_expr(node.left) and _is_numeric_expr(node.right)
+    return False
+
+
+def _is_point_expression(node: ast.AST) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in POINT_LITERAL_NAMES
+    if isinstance(node, (ast.Tuple, ast.List)):
+        return len(node.elts) in {2, 3} and all(_is_numeric_expr(item) for item in node.elts)
+    if isinstance(node, ast.UnaryOp):
+        return _is_point_expression(node.operand)
+    if isinstance(node, ast.BinOp):
+        if isinstance(node.op, (ast.Add, ast.Sub)):
+            return _is_point_expression(node.left) and _is_point_expression(node.right)
+        if isinstance(node.op, (ast.Mult, ast.Div)):
+            return (
+                (_is_point_expression(node.left) and _is_numeric_expr(node.right))
+                or (_is_numeric_expr(node.left) and _is_point_expression(node.right))
+            )
+    if isinstance(node, ast.Call):
+        call_name = _call_name(node.func)
+        return (
+            call_name.split(".")[-1] in POINT_FUNCTION_NAMES
+            or call_name.endswith(".c2p")
+            or call_name.endswith(".point_from_proportion")
+        )
+    return False
 
 
 def _examples_block(examples: list[SceneExample]) -> str:
@@ -242,6 +280,12 @@ def _repair_scene_code(scene_code: str) -> str:
     class HelperQualifier(ast.NodeTransformer):
         def visit_Call(self, node: ast.Call) -> ast.AST:
             self.generic_visit(node)
+            if isinstance(node.func, ast.Attribute) and len(node.args) == 1:
+                base = node.func.value
+                if node.func.attr == "shift" and _is_point_expression(base):
+                    return ast.BinOp(left=base, op=ast.Add(), right=node.args[0])
+                if node.func.attr == "scale" and _is_point_expression(base) and _is_numeric_expr(node.args[0]):
+                    return ast.BinOp(left=base, op=ast.Mult(), right=node.args[0])
             if isinstance(node.func, ast.Name) and node.func.id in RUNTIME_HELPER_NAMES:
                 node.func = ast.Attribute(value=ast.Name(id="self", ctx=ast.Load()), attr=node.func.id, ctx=ast.Load())
             call_name = _call_name(node.func)

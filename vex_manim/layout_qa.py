@@ -33,9 +33,30 @@ class LayoutBox:
     text_preview: str = ""
     allow_scale_down: bool = True
     priority: int = 0
+    text_left: float | None = None
+    text_right: float | None = None
+    text_top: float | None = None
+    text_bottom: float | None = None
+    text_width: float | None = None
+    text_height: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def bounds(self, *, prefer_text: bool = False) -> tuple[float, float, float, float]:
+        if prefer_text and None not in {
+            self.text_left,
+            self.text_right,
+            self.text_top,
+            self.text_bottom,
+        }:
+            return (
+                float(self.text_left),
+                float(self.text_right),
+                float(self.text_top),
+                float(self.text_bottom),
+            )
+        return (self.left, self.right, self.top, self.bottom)
 
 
 @dataclass
@@ -63,18 +84,47 @@ def load_layout_snapshot(path: str | Path) -> dict[str, Any]:
     return json.loads(snapshot_path.read_text(encoding="utf-8"))
 
 
-def _intersects(first: LayoutBox, second: LayoutBox) -> tuple[float, float]:
-    overlap_x = max(0.0, min(first.right, second.right) - max(first.left, second.left))
-    overlap_y = max(0.0, min(first.top, second.top) - max(first.bottom, second.bottom))
+def _intersects(
+    first: LayoutBox,
+    second: LayoutBox,
+    *,
+    first_prefer_text: bool = False,
+    second_prefer_text: bool = False,
+) -> tuple[float, float]:
+    first_left, first_right, first_top, first_bottom = first.bounds(prefer_text=first_prefer_text)
+    second_left, second_right, second_top, second_bottom = second.bounds(prefer_text=second_prefer_text)
+    overlap_x = max(0.0, min(first_right, second_right) - max(first_left, second_left))
+    overlap_y = max(0.0, min(first_top, second_top) - max(first_bottom, second_bottom))
     return overlap_x, overlap_y
 
 
-def _overlap_ratio(first: LayoutBox, second: LayoutBox) -> float:
-    overlap_x, overlap_y = _intersects(first, second)
+def _overlap_ratio(
+    first: LayoutBox,
+    second: LayoutBox,
+    *,
+    first_prefer_text: bool = False,
+    second_prefer_text: bool = False,
+) -> float:
+    overlap_x, overlap_y = _intersects(
+        first,
+        second,
+        first_prefer_text=first_prefer_text,
+        second_prefer_text=second_prefer_text,
+    )
     if overlap_x <= 0.0 or overlap_y <= 0.0:
         return 0.0
     overlap_area = overlap_x * overlap_y
-    min_area = max(min(first.width * first.height, second.width * second.height), 1e-6)
+    first_area = (
+        max(float(first.text_width or 0.0), 0.0) * max(float(first.text_height or 0.0), 0.0)
+        if first_prefer_text and first.text_width is not None and first.text_height is not None
+        else first.width * first.height
+    )
+    second_area = (
+        max(float(second.text_width or 0.0), 0.0) * max(float(second.text_height or 0.0), 0.0)
+        if second_prefer_text and second.text_width is not None and second.text_height is not None
+        else second.width * second.height
+    )
+    min_area = max(min(first_area, second_area), 1e-6)
     return overlap_area / min_area
 
 
@@ -107,6 +157,12 @@ def _layout_boxes(snapshot: dict[str, Any]) -> list[LayoutBox]:
                     text_preview=str(raw.get("text_preview") or ""),
                     allow_scale_down=bool(raw.get("allow_scale_down", True)),
                     priority=int(raw.get("priority") or 0),
+                    text_left=float(raw["text_left"]) if raw.get("text_left") is not None else None,
+                    text_right=float(raw["text_right"]) if raw.get("text_right") is not None else None,
+                    text_top=float(raw["text_top"]) if raw.get("text_top") is not None else None,
+                    text_bottom=float(raw["text_bottom"]) if raw.get("text_bottom") is not None else None,
+                    text_width=float(raw["text_width"]) if raw.get("text_width") is not None else None,
+                    text_height=float(raw["text_height"]) if raw.get("text_height") is not None else None,
                 )
             )
         except (TypeError, ValueError):
@@ -161,14 +217,20 @@ def analyze_layout_snapshot(snapshot: dict[str, Any], brief: SceneBrief) -> Layo
                 continue
             if first.connector_like or second.connector_like:
                 continue
-            overlap_ratio = _overlap_ratio(first, second)
+            text_role_pair = first.role in TEXT_ROLES and second.role in TEXT_ROLES
+            overlap_ratio = _overlap_ratio(
+                first,
+                second,
+                first_prefer_text=first.text_based,
+                second_prefer_text=second.text_based,
+            )
             if overlap_ratio <= 0.0:
                 continue
-            if first.text_based and second.text_based and overlap_ratio > 0.12:
+            if text_role_pair and first.text_based and second.text_based and overlap_ratio > 0.12:
                 issues.append(f"{first.name} overlaps {second.name}; text elements are colliding.")
-            elif first.text_based and not second.panel_like and overlap_ratio > 0.18:
+            elif first.text_based and not second.panel_like and overlap_ratio > 0.22:
                 issues.append(f"{first.name} is colliding with {second.name}.")
-            elif second.text_based and not first.panel_like and overlap_ratio > 0.18:
+            elif second.text_based and not first.panel_like and overlap_ratio > 0.22:
                 issues.append(f"{second.name} is colliding with {first.name}.")
 
     panel_count = sum(1 for box in boxes if box.role == "panel" or box.panel_like)

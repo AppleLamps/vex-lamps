@@ -80,6 +80,7 @@ def _legacy_scene_script(scene_name: str, spec: dict[str, Any]) -> str:
     return f"""from __future__ import annotations
 
 import json
+import re
 
 from manim import *
 
@@ -90,13 +91,75 @@ def theme(name: str, fallback: str) -> str:
     return str(SPEC.get("theme", {{}}).get(name) or fallback)
 
 
+def render_text_candidate(content: str, size: int, color: str, weight=BOLD, slant=NORMAL):
+    return Text(content, font_size=size, color=ManimColor(color), weight=weight, slant=slant)
+
+
+def wrap_variant(content: str, max_width: float, size: int, color: str, weight=BOLD, slant=NORMAL, max_lines: int = 4):
+    words = [word for word in re.sub(r"\\s+", " ", str(content or "")).strip().split(" ") if word]
+    if len(words) <= 1:
+        return " ".join(words) or " "
+    original = " ".join(words)
+    best_variant = original
+    best_overflow = max(render_text_candidate(original, size, color, weight=weight, slant=slant).width - max_width, 0.0)
+    for line_limit in range(2, max_lines + 1):
+        lines = []
+        current = []
+        success = True
+        for word in words:
+            tentative = " ".join([*current, word]).strip()
+            if current and render_text_candidate(tentative, size, color, weight=weight, slant=slant).width > max_width:
+                lines.append(" ".join(current).strip())
+                current = [word]
+                if len(lines) >= line_limit:
+                    success = False
+                    break
+            else:
+                current.append(word)
+        if not success or not current:
+            continue
+        lines.append(" ".join(current).strip())
+        if len(lines) > line_limit:
+            continue
+        candidate_variant = "\\n".join(lines)
+        candidate = render_text_candidate(candidate_variant, size, color, weight=weight, slant=slant)
+        overflow = max(candidate.width - max_width, 0.0)
+        if overflow <= 0.01:
+            return candidate_variant
+        if overflow < best_overflow:
+            best_variant = candidate_variant
+            best_overflow = overflow
+    return best_variant
+
+
 def clamp_text(content: str, max_width: float, max_font_size: int, min_font_size: int, color: str, weight=BOLD, slant=NORMAL):
-    cleaned = str(content or "").strip() or " "
+    cleaned = re.sub(r"\\s+", " ", str(content or "")).strip() or " "
     for size in range(max_font_size, min_font_size - 1, -4):
-        text = Text(cleaned, font_size=size, color=ManimColor(color), weight=weight, slant=slant)
+        text = render_text_candidate(cleaned, size, color, weight=weight, slant=slant)
         if text.width <= max_width:
             return text
-    return Text(cleaned, font_size=min_font_size, color=ManimColor(color), weight=weight, slant=slant)
+        wrapped = wrap_variant(cleaned, max_width, size, color, weight=weight, slant=slant)
+        wrapped_text = render_text_candidate(wrapped, size, color, weight=weight, slant=slant)
+        if wrapped_text.width <= max_width:
+            return wrapped_text
+    final_variant = wrap_variant(cleaned, max_width, min_font_size, color, weight=weight, slant=slant)
+    return render_text_candidate(final_variant, min_font_size, color, weight=weight, slant=slant)
+
+
+def compact_metric_value(emphasis: str, headline: str):
+    emphasis_value = str(emphasis or "").strip()
+    if emphasis_value and len(emphasis_value.split()) <= 3 and len(emphasis_value) <= 18:
+        return emphasis_value
+    numeric_phrase = re.search(r"(\\b\\d+(?:\\.\\d+)?\\s*(?:x|%|h|hr|hrs|hour|hours|min|mins|minutes|sec|seconds|pg|pages?)\\b)", str(headline or ""), re.IGNORECASE)
+    if numeric_phrase:
+        return numeric_phrase.group(1).strip()
+    numeric_value = re.search(r"\\b\\d+(?:\\.\\d+)?\\b", str(headline or ""))
+    if numeric_value:
+        return numeric_value.group(0).strip()
+    words = [word for word in re.sub(r"\\s+", " ", str(headline or "")).strip().split(" ") if word]
+    if not words:
+        return "Key Point"
+    return " ".join(words[: min(len(words), 3)])
 
 
 def line_stack(lines, max_width: float, max_font_size: int, min_font_size: int, color: str, weight=MEDIUM, aligned_edge=LEFT):
@@ -248,9 +311,7 @@ class {scene_name}(Scene):
             hero = glass_card(5.55, 4.15, fill=panel_fill, stroke=panel_stroke, radius=0.28)
             hero.to_edge(LEFT, buff=1.0)
             hero.shift(DOWN * 1.32 + RIGHT * 0.08)
-            value_source = str(SPEC.get("emphasis_text") or SPEC.get("headline") or "Key Point").strip()
-            if any(character.isdigit() for character in str(SPEC.get("headline") or "")):
-                value_source = str(SPEC.get("headline") or value_source).strip()
+            value_source = compact_metric_value(str(SPEC.get("emphasis_text") or ""), str(SPEC.get("headline") or ""))
             value = clamp_text(value_source, max_width=4.3, max_font_size=74, min_font_size=38, color=primary)
             value.move_to(hero[0].get_center() + LEFT * 0.16 + UP * 0.18)
             kicker = clamp_text("MEASURABLE CHANGE", max_width=3.1, max_font_size=17, min_font_size=12, color=accent_secondary, weight=BOLD)
@@ -672,10 +733,23 @@ def _has_strong_motion_grammar(brief, validation) -> bool:
     )
 
 
+def _is_minor_layout_overlap_issue(issue: str) -> bool:
+    cleaned = str(issue or "").strip().lower()
+    return "overlaps" in cleaned or "colliding with" in cleaned
+
+
 def _can_soft_accept_quality(brief, validation, quality) -> bool:
     if quality.passed:
         return True
     if quality.layout is not None and not quality.layout.passed:
+        issues = list(quality.issues)
+        if (
+            quality.score >= 0.82
+            and issues
+            and all(_is_minor_layout_overlap_issue(issue) for issue in issues)
+            and _has_strong_motion_grammar(brief, validation)
+        ):
+            return True
         return False
     if quality.score < 0.88:
         return False

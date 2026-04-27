@@ -158,21 +158,65 @@ class VexGeneratedScene(MovingCameraScene):
             weight = font_weight
         if font_style is not None:
             slant = font_style
-        cleaned = str(text or "").strip() or " "
+        cleaned = re.sub(r"\s+", " ", str(text or "")).strip() or " "
         resolved_max_width = float(max_width if max_width is not None else min(max(len(cleaned) * 0.28, 3.6), 10.0))
         resolved_max_font_size = int(max_font_size if max_font_size is not None else 34)
-        for size in range(resolved_max_font_size, min_font_size - 1, -4):
-            candidate = Text(
-                cleaned,
+
+        def render_candidate(content: str, size: int) -> Text:
+            return Text(
+                content,
                 font_size=size,
                 color=ManimColor(color or self.theme_color("text_primary")),
                 weight=weight,
                 slant=slant,
             )
+
+        def wrap_variant(content: str, size: int, *, max_lines: int = 4) -> str:
+            words = [word for word in content.split(" ") if word]
+            if len(words) <= 1:
+                return content
+            best_variant = content
+            best_overflow = max(render_candidate(content, size).width - resolved_max_width, 0.0)
+            for line_limit in range(2, max_lines + 1):
+                lines: list[str] = []
+                current: list[str] = []
+                success = True
+                for word in words:
+                    tentative = " ".join([*current, word]).strip()
+                    if current and render_candidate(tentative, size).width > resolved_max_width:
+                        lines.append(" ".join(current).strip())
+                        current = [word]
+                        if len(lines) >= line_limit:
+                            success = False
+                            break
+                    else:
+                        current.append(word)
+                if not success or not current:
+                    continue
+                lines.append(" ".join(current).strip())
+                if len(lines) > line_limit:
+                    continue
+                candidate_variant = "\n".join(lines)
+                candidate = render_candidate(candidate_variant, size)
+                overflow = max(candidate.width - resolved_max_width, 0.0)
+                if overflow <= 0.01:
+                    return candidate_variant
+                if overflow < best_overflow:
+                    best_variant = candidate_variant
+                    best_overflow = overflow
+            return best_variant
+
+        for size in range(resolved_max_font_size, min_font_size - 1, -4):
+            candidate = render_candidate(cleaned, size)
             if candidate.width <= resolved_max_width:
                 return candidate
+            wrapped_variant = wrap_variant(cleaned, size)
+            wrapped_candidate = render_candidate(wrapped_variant, size)
+            if wrapped_candidate.width <= resolved_max_width:
+                return wrapped_candidate
+        final_variant = wrap_variant(cleaned, min_font_size)
         return Text(
-            cleaned,
+            final_variant,
             font_size=min_font_size,
             color=ManimColor(color or self.theme_color("text_primary")),
             weight=weight,
@@ -637,14 +681,21 @@ class VexGeneratedScene(MovingCameraScene):
         count = self._layout_name_counts.get(base, 0) + 1
         self._layout_name_counts[base] = count
         unique_name = base if count == 1 else f"{base}_{count}"
+        normalized_role = str(role or "group")
+        lowered_name = unique_name.lower()
+        if normalized_role == "metric":
+            if any(token in lowered_name for token in ("title", "headline", "header")):
+                normalized_role = "title"
+            elif any(token in lowered_name for token in ("verdict", "takeaway", "lesson", "thesis")):
+                normalized_role = "hero"
         entry = {
             "name": unique_name,
             "mob": mob,
-            "role": str(role or "group"),
-            "priority": ROLE_PRIORITIES.get(str(role or "group"), 30) if priority is None else int(priority),
+            "role": normalized_role,
+            "priority": ROLE_PRIORITIES.get(normalized_role, 30) if priority is None else int(priority),
             "allow_scale_down": bool(allow_scale_down),
             "avoid_safe_bottom": (
-                str(role or "group") in {"title", "text", "label", "support", "quote"}
+                normalized_role in {"title", "text", "label", "support", "quote"}
                 if avoid_safe_bottom is None
                 else bool(avoid_safe_bottom)
             ),
@@ -778,6 +829,38 @@ class VexGeneratedScene(MovingCameraScene):
         sizes = [value for value in sizes if value is not None]
         return max(sizes) if sizes else None
 
+    def _text_leaves(self, mob: Any) -> list[Any]:
+        children = [child for child in getattr(mob, "submobjects", []) if child is not None]
+        if mob.__class__.__name__ in TEXT_CLASS_MARKERS and float(getattr(mob, "width", 0.0) or 0.0) > 0.01 and float(getattr(mob, "height", 0.0) or 0.0) > 0.01:
+            return [mob]
+        leaves: list[Any] = []
+        for child in children:
+            leaves.extend(self._text_leaves(child))
+        return leaves
+
+    def _combined_bbox(self, mobs: list[Any]) -> dict[str, float] | None:
+        if not mobs:
+            return None
+        left = min(float(mob.get_left()[0]) for mob in mobs)
+        right = max(float(mob.get_right()[0]) for mob in mobs)
+        top = max(float(mob.get_top()[1]) for mob in mobs)
+        bottom = min(float(mob.get_bottom()[1]) for mob in mobs)
+        width = max(right - left, 0.0)
+        height = max(top - bottom, 0.0)
+        return {
+            "left": left,
+            "right": right,
+            "top": top,
+            "bottom": bottom,
+            "width": width,
+            "height": height,
+            "center_x": (left + right) / 2,
+            "center_y": (top + bottom) / 2,
+        }
+
+    def _text_bbox(self, mob: Any) -> dict[str, float] | None:
+        return self._combined_bbox(self._text_leaves(mob))
+
     def _record_guardrail_action(self, kind: str, target: str, **details: Any) -> None:
         self._guardrail_actions.append(
             {
@@ -855,6 +938,7 @@ class VexGeneratedScene(MovingCameraScene):
     def _anchor_layout_roles(self, entries: list[dict[str, Any]], *, safe_bounds: dict[str, float], frame_bounds: dict[str, float]) -> None:
         titles = [entry for entry in entries if str(entry.get("role") or "") == "title"]
         charts = [entry for entry in entries if str(entry.get("role") or "") in {"chart", "structure", "system", "diagram"}]
+        heroes = [entry for entry in entries if str(entry.get("role") or "") == "hero"]
         metrics = [entry for entry in entries if str(entry.get("role") or "") == "metric"]
         supports = [entry for entry in entries if str(entry.get("role") or "") in {"support", "footer", "quote"}]
 
@@ -876,6 +960,31 @@ class VexGeneratedScene(MovingCameraScene):
             if box["top"] > chart_ceiling:
                 target_y = chart_ceiling - box["height"] / 2
                 self._move_entry_to(chart, center_x=box["center_x"], center_y=target_y, kind="anchor_chart")
+
+        chart_boxes = [self._bbox(entry["mob"]) for entry in charts]
+        if chart_boxes:
+            chart_left = min(box["left"] for box in chart_boxes)
+            chart_right = max(box["right"] for box in chart_boxes)
+            chart_bottom = min(box["bottom"] for box in chart_boxes)
+            chart_center_x = sum(box["center_x"] for box in chart_boxes) / len(chart_boxes)
+        else:
+            chart_left = chart_right = chart_bottom = chart_center_x = 0.0
+
+        for hero in sorted(heroes, key=lambda item: int(item.get("priority") or 0), reverse=True):
+            box = self._bbox(hero["mob"])
+            target_y = max(frame_bounds["bottom"] + box["height"] / 2 + 0.34, chart_bottom - 0.28 - box["height"] / 2)
+            target_x = 0.0
+            if chart_boxes:
+                chart_span = chart_right - chart_left
+                if chart_span < frame_bounds["width"] * 0.48:
+                    target_x = (
+                        safe_bounds["right"] - box["width"] / 2
+                        if chart_center_x <= 0.0
+                        else safe_bounds["left"] + box["width"] / 2
+                    )
+            overlaps_chart_band = chart_boxes and box["top"] > chart_bottom - 0.08
+            if overlaps_chart_band or abs(box["center_x"] - target_x) > 0.16 or abs(box["center_y"] - target_y) > 0.16:
+                self._move_entry_to(hero, center_x=target_x, center_y=target_y, kind="anchor_hero")
 
         for index, metric in enumerate(sorted(metrics, key=lambda item: int(item.get("priority") or 0), reverse=True)):
             box = self._bbox(metric["mob"])
@@ -1046,6 +1155,7 @@ class VexGeneratedScene(MovingCameraScene):
     def _entry_payload(self, entry: dict[str, Any]) -> dict[str, Any]:
         mob = entry["mob"]
         box = self._bbox(mob)
+        text_box = self._text_bbox(mob)
         payload = {
             "name": str(entry.get("name") or mob.__class__.__name__),
             "role": str(entry.get("role") or "group"),
@@ -1066,6 +1176,17 @@ class VexGeneratedScene(MovingCameraScene):
             "allow_scale_down": bool(entry.get("allow_scale_down", True)),
             "priority": int(entry.get("priority") or 0),
         }
+        if text_box is not None:
+            payload.update(
+                {
+                    "text_left": round(text_box["left"], 4),
+                    "text_right": round(text_box["right"], 4),
+                    "text_top": round(text_box["top"], 4),
+                    "text_bottom": round(text_box["bottom"], 4),
+                    "text_width": round(text_box["width"], 4),
+                    "text_height": round(text_box["height"], 4),
+                }
+            )
         return payload
 
     def _dump_layout_snapshot(self) -> None:
