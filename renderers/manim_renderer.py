@@ -14,7 +14,12 @@ from engine import probe_video
 from renderers.base import RenderedAsset, RendererStatus, VisualRenderer, VisualRendererError
 from vex_manim.blueprint import build_scene_blueprints
 from vex_manim.briefs import build_scene_brief
-from vex_manim.director import request_scene_candidate, write_generation_report
+from vex_manim.director import (
+    build_deterministic_execution_plan,
+    request_scene_candidate,
+    request_scene_execution_plan,
+    write_generation_report,
+)
 from vex_manim.layout_qa import analyze_layout_snapshot, load_layout_snapshot
 from vex_manim.premium_fallback import run_premium_blueprint_scene
 from vex_manim.qa import analyze_preview, evaluate_generated_scene_quality, extract_preview_frames
@@ -1046,6 +1051,21 @@ class ManimRenderer(VisualRenderer):
             preferred_features=selected_blueprint.suggested_features,
         )
         full_examples = list(examples)
+        _emit_render_progress(
+            f"{spec.get('visual_id', 'visual')}: planning scene execution"
+        )
+        selected_execution_plan = request_scene_execution_plan(
+            provider_name,
+            model_name,
+            brief,
+            selected_blueprint,
+            alternative_blueprints=[item for item in blueprint_candidates if item.blueprint_id != selected_blueprint.blueprint_id][:2],
+        )
+        execution_plan_path = job_dir / "scene_execution_plan.json"
+        execution_plan_path.write_text(
+            json.dumps(selected_execution_plan.to_dict(), indent=2),
+            encoding="utf-8",
+        )
         attempt_budget = _attempt_budget_for_brief(brief, spec)
         compact_preview = _use_compact_preview(brief, spec)
         preview_fps, preview_frame_count = _preview_render_budget(brief, fps, compact=compact_preview)
@@ -1080,6 +1100,11 @@ class ManimRenderer(VisualRenderer):
                 if compact_retry and full_examples
                 else list(full_examples)
             )
+            active_execution_plan = (
+                selected_execution_plan
+                if active_blueprint.blueprint_id == selected_blueprint.blueprint_id
+                else build_deterministic_execution_plan(brief, active_blueprint)
+            )
             _emit_render_progress(
                 f"{spec.get('visual_id', 'visual')}: generation attempt {attempt_index}/{attempt_budget}"
             )
@@ -1094,6 +1119,7 @@ class ManimRenderer(VisualRenderer):
                     brief,
                     active_examples,
                     active_blueprint,
+                    active_execution_plan,
                     alternative_blueprints=[item for item in blueprint_candidates if item.blueprint_id != active_blueprint.blueprint_id][:2],
                     previous_code=previous_code,
                     feedback_lines=feedback_lines,
@@ -1271,6 +1297,7 @@ class ManimRenderer(VisualRenderer):
             brief=brief,
             blueprint_candidates=blueprint_candidates,
             selected_blueprint=selected_blueprint,
+            selected_execution_plan=selected_execution_plan,
             selected_examples=full_examples,
             attempts=attempts,
             final_candidate=chosen_candidate,
@@ -1282,6 +1309,7 @@ class ManimRenderer(VisualRenderer):
             "generation_report_path": str(report_path),
             "scene_brief_path": str(brief_path),
             "scene_blueprints_path": str(blueprints_path),
+            "scene_execution_plan_path": str(execution_plan_path),
         }
         layout_snapshot_path = job_dir / "layout_snapshot.json"
         artifact_paths["layout_snapshot_path"] = str(layout_snapshot_path)
@@ -1290,6 +1318,7 @@ class ManimRenderer(VisualRenderer):
             "scene_family": brief.scene_family,
             "blueprint_id": selected_blueprint.blueprint_id,
             "blueprint_archetype": selected_blueprint.archetype,
+            "execution_plan_source": selected_execution_plan.source,
             "camera_style": brief.camera_style,
             "animation_intensity": brief.animation_intensity,
             "selected_examples": [example.example_id for example in examples],

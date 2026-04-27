@@ -24,6 +24,93 @@ class SceneCandidate:
         return asdict(self)
 
 
+@dataclass
+class PlannedElement:
+    element_id: str
+    role: str
+    treatment: str
+    copy_lines: list[str]
+    source_hint: str = ""
+    layout_intent: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class PlannedBeat:
+    beat_id: str
+    focus: str
+    story_goal: str
+    motion: str
+    camera: str
+    visible_elements: list[str]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class SceneExecutionPlan:
+    summary: str
+    intuition_thesis: str
+    visual_logic: str
+    motion_spine: str
+    title_text: str
+    deck_text: str
+    layout_rules: list[str]
+    guardrails: list[str]
+    advanced_devices: list[str]
+    element_plan: list[PlannedElement]
+    beat_plan: list[PlannedBeat]
+    source: str = "deterministic"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "summary": self.summary,
+            "intuition_thesis": self.intuition_thesis,
+            "visual_logic": self.visual_logic,
+            "motion_spine": self.motion_spine,
+            "title_text": self.title_text,
+            "deck_text": self.deck_text,
+            "layout_rules": list(self.layout_rules),
+            "guardrails": list(self.guardrails),
+            "advanced_devices": list(self.advanced_devices),
+            "element_plan": [item.to_dict() for item in self.element_plan],
+            "beat_plan": [item.to_dict() for item in self.beat_plan],
+            "source": self.source,
+        }
+
+    def to_prompt_block(self) -> str:
+        lines = [
+            f"Summary: {self.summary}",
+            f"Intuition thesis: {self.intuition_thesis}",
+            f"Visual logic: {self.visual_logic}",
+            f"Motion spine: {self.motion_spine}",
+            f"Title text: {self.title_text or '(none)'}",
+        ]
+        if self.deck_text:
+            lines.append(f"Deck text: {self.deck_text}")
+        lines.append("Layout rules:")
+        lines.extend(f"- {item}" for item in self.layout_rules)
+        lines.append("Element assignments:")
+        lines.extend(
+            f"- {item.element_id}: role={item.role}, treatment={item.treatment}, copy={item.copy_lines or ['(none)']}, layout={item.layout_intent or 'n/a'}"
+            for item in self.element_plan
+        )
+        lines.append("Beat plan:")
+        lines.extend(
+            f"- {item.beat_id}: focus={item.focus}; goal={item.story_goal}; motion={item.motion}; camera={item.camera}; visible={', '.join(item.visible_elements)}"
+            for item in self.beat_plan
+        )
+        if self.guardrails:
+            lines.append("Guardrails:")
+            lines.extend(f"- {item}" for item in self.guardrails)
+        if self.advanced_devices:
+            lines.append(f"Advanced devices: {', '.join(self.advanced_devices)}")
+        return "\n".join(lines)
+
+
 RUNTIME_HELPER_NAMES = {
     "apply_house_background",
     "make_title_block",
@@ -208,6 +295,10 @@ def _blueprint_block(blueprint: SceneBlueprint, alternatives: list[SceneBlueprin
     return "\n".join(lines)
 
 
+def _execution_plan_block(plan: SceneExecutionPlan) -> str:
+    return plan.to_prompt_block()
+
+
 def _intuition_block(brief: SceneBrief) -> str:
     lines = [
         f"Mode: {brief.intuition_mode or 'general'}",
@@ -230,6 +321,183 @@ def _intuition_block(brief: SceneBrief) -> str:
     return "\n".join(lines)
 
 
+def _condense_copy(text: str, *, max_words: int, max_chars: int) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "").replace("\n", " ")).strip(" -:;,")
+    cleaned = re.sub(r"\$?\s*\\?(?:right)?arrow\s*\$?", " -> ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -:;,")
+    if not cleaned:
+        return ""
+    fragments = re.split(r"[.;:!?]|(?:\s+-\s+)", cleaned)
+    candidate = next((fragment.strip() for fragment in fragments if fragment.strip()), cleaned)
+    words = candidate.split()
+    if len(words) > max_words:
+        candidate = " ".join(words[:max_words]).strip()
+    if len(candidate) > max_chars:
+        candidate = candidate[: max_chars - 1].rstrip(" ,;:-") + "…"
+    return candidate.strip()
+
+
+def _unique_nonempty(items: list[str]) -> list[str]:
+    values: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        text = str(item or "").strip()
+        key = text.lower()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        values.append(text)
+    return values
+
+
+def _sanitize_plan_text(text: str, *, max_chars: int) -> str:
+    cleaned = str(text or "").replace("\\n", " ")
+    cleaned = re.sub(r"\$?\s*\\?(?:right)?arrow\s*\$?", " -> ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -:;,")
+    return truncate(cleaned, max_chars)
+
+
+def _copy_candidates(brief: SceneBrief, source_hint: str, role: str) -> list[str]:
+    bank = dict(brief.copy_bank or {})
+    if brief.intuition_mode == "process_route" and role in {"chart", "diagram", "hero"}:
+        route_bits = _unique_nonempty(
+            [
+                brief.before_state,
+                brief.after_state,
+                *[str(item).strip() for item in list(bank.get("steps") or []) if str(item).strip()],
+                brief.viewer_takeaway,
+            ]
+        )
+        if route_bits:
+            return route_bits
+    if role in {"chart", "diagram", "hero"} and bank.get("steps"):
+        return [str(item).strip() for item in list(bank.get("steps") or []) if str(item).strip()]
+    semantic_pairs = {
+        "headline": [brief.headline],
+        "deck": [brief.deck],
+        "left_detail": [bank.get("left_detail") or brief.before_state],
+        "right_detail": [bank.get("right_detail") or brief.after_state],
+        "sentence_text": [bank.get("sentence_text") or brief.spoken_anchor],
+        "supporting_lines": list(bank.get("supporting_lines") or []),
+        "steps": list(bank.get("steps") or []),
+        "keywords": list(bank.get("keywords") or []),
+        "footer_text": [bank.get("footer_text") or brief.viewer_takeaway],
+    }
+    values = semantic_pairs.get(str(source_hint or "").strip(), [])
+    if not values:
+        values = [brief.viewer_takeaway, brief.after_state, brief.headline, brief.deck]
+    return [str(item).strip() for item in values if str(item or "").strip()]
+
+
+def _copy_lines_for_element(brief: SceneBrief, role: str, source_hint: str) -> list[str]:
+    max_words = 3 if role in {"metric", "label", "chip"} else 5
+    if role == "title":
+        max_words = min(max(4, brief.text_budget_words // 2), 8)
+    if role in {"hero", "diagram"}:
+        max_words = 4
+    candidates = _copy_candidates(brief, source_hint, role)
+    chosen = [_condense_copy(item, max_words=max_words, max_chars=44 if role != "title" else 72) for item in candidates]
+    chosen = _unique_nonempty([item for item in chosen if item])
+    if role == "title":
+        if chosen:
+            return chosen[:1]
+        return [_condense_copy(brief.headline or brief.viewer_takeaway, max_words=max_words, max_chars=72)]
+    if role == "metric":
+        return chosen[:1]
+    if role in {"hero", "diagram"}:
+        return chosen[:2]
+    return chosen[:2]
+
+
+def _role_treatment(role: str, kind: str) -> str:
+    if role == "title":
+        return "editorial_band"
+    if role == "metric":
+        return "counter_or_badge"
+    if role == "chart":
+        return "evidence_geometry"
+    if role == "hero" and "state" in kind:
+        return "state_cluster"
+    if role == "hero":
+        return "hero_focus"
+    if role == "diagram":
+        return "signal_or_route_label"
+    if role == "background":
+        return "ambient_depth"
+    return kind or "support_label"
+
+
+def _layout_intent(element: Any) -> str:
+    placement = str(getattr(element, "placement", "") or "").replace("_", " ")
+    motion = str(getattr(element, "motion", "") or "").replace("_", " ")
+    return truncate(f"{placement}; motion={motion}", 80)
+
+
+def build_deterministic_execution_plan(brief: SceneBrief, blueprint: SceneBlueprint) -> SceneExecutionPlan:
+    title_text = _condense_copy(brief.headline or brief.viewer_takeaway or brief.spoken_anchor, max_words=min(max(4, brief.text_budget_words // 2), 8), max_chars=72)
+    deck_basis = brief.viewer_takeaway or brief.after_state or brief.deck
+    deck_text = _condense_copy(deck_basis, max_words=8, max_chars=76)
+    element_plan: list[PlannedElement] = []
+    for element in blueprint.elements:
+        if str(element.role or "").strip().lower() == "background":
+            copy_lines: list[str] = []
+        else:
+            copy_lines = _copy_lines_for_element(brief, str(element.role or "").strip().lower(), str(element.copy_source or "").strip())
+        if str(element.role or "").strip().lower() == "title" and title_text:
+            copy_lines = [title_text]
+        element_plan.append(
+            PlannedElement(
+                element_id=str(element.element_id or ""),
+                role=str(element.role or ""),
+                treatment=_role_treatment(str(element.role or ""), str(element.kind or "")),
+                copy_lines=copy_lines,
+                source_hint=str(element.copy_source or ""),
+                layout_intent=_layout_intent(element),
+            )
+        )
+    beat_plan = [
+        PlannedBeat(
+            beat_id=str(beat.beat_id or f"beat_{index + 1}"),
+            focus=str(beat.focus or ""),
+            story_goal=_condense_copy(str(beat.purpose or ""), max_words=10, max_chars=90),
+            motion=_condense_copy(" / ".join(str(item).replace("_", " ") for item in beat.actions), max_words=12, max_chars=90),
+            camera=_condense_copy(blueprint.camera_plan, max_words=12, max_chars=90),
+            visible_elements=[
+                item.element_id
+                for item in element_plan
+                if item.element_id == beat.focus or item.role in {"title", "hero", "metric"}
+            ][:4],
+        )
+        for index, beat in enumerate(blueprint.motion_beats)
+    ]
+    layout_rules = [
+        "Keep the title compact and anchored; do not let it drift into the evidence geometry.",
+        "Let the motion spine stay visible throughout the scene, even while labels animate.",
+        "Use short labels only; prefer chips, badges, and side labels over transcript fragments.",
+    ]
+    if brief.before_state and brief.after_state:
+        layout_rules.append("Make the before/after contrast readable at a glance with clear spatial separation.")
+    guardrails = [
+        "Never put paragraph-length copy inside small shapes.",
+        "Do not repeat the same sentence in the title and support labels.",
+        "Do not let background depth objects compete with the focal system.",
+    ]
+    return SceneExecutionPlan(
+        summary=truncate(f"{brief.objective} through {blueprint.archetype.replace('_', ' ')}", 180),
+        intuition_thesis=brief.mental_model or brief.viewer_takeaway or brief.objective,
+        visual_logic=blueprint.rationale,
+        motion_spine=blueprint.focal_system,
+        title_text=title_text,
+        deck_text=deck_text,
+        layout_rules=layout_rules,
+        guardrails=guardrails,
+        advanced_devices=list(blueprint.dynamic_devices[: max(brief.minimum_dynamic_devices, 2)]),
+        element_plan=element_plan,
+        beat_plan=beat_plan,
+        source="deterministic",
+    )
+
+
 def _system_prompt() -> str:
     return (
         "You are a principal motion designer and senior Manim engineer writing production-quality animation code. "
@@ -250,6 +518,7 @@ def _user_prompt(
     examples: list[SceneExample],
     skills: list[SkillSlice],
     blueprint: SceneBlueprint,
+    execution_plan: SceneExecutionPlan,
     *,
     alternative_blueprints: list[SceneBlueprint] | None = None,
     previous_code: str | None = None,
@@ -278,6 +547,8 @@ def _user_prompt(
         "Relevant Manim skill slices:\n"
         f"{_skills_block(skills)}\n\n"
         f"{_blueprint_block(blueprint, list(alternative_blueprints or []))}\n\n"
+        "Execution plan:\n"
+        f"{_execution_plan_block(execution_plan)}\n\n"
         "Retrieved scene examples:\n"
         f"{_examples_block(examples)}\n\n"
         "Scene contract:\n"
@@ -287,6 +558,8 @@ def _user_prompt(
         "- Add the title treatment with make_title_block unless the scene has a stronger editorial framing.\n"
         "- Call runtime helpers as self.make_title_block(...), self.make_orbit_ring(...), self.camera_focus(...), and so on; never use bare helper calls.\n"
         "- Honor the selected blueprint's focal system, motion beats, and element roles; do not collapse it into generic panels or stacked text boxes.\n"
+        "- Execute the provided plan faithfully: use its title text, element assignments, and beat sequence as the scene's concrete recipe.\n"
+        "- Do not expand the planned copy into longer prose. If a planned element has compact copy, keep it compact in code.\n"
         "- Make the mental-model shift legible: the viewer should understand why the idea works, not just read the subtitle again.\n"
         "- Use the before/after/cause/effect context when present; convert it into visual logic, not extra prose.\n"
         "- If the blueprint uses a route, orbit, bridge, ladder, sweep, or focus lane, that motion spine must remain visible in the final scene.\n"
@@ -475,12 +748,194 @@ def _parse_candidate(raw_text: str) -> SceneCandidate:
     return SceneCandidate(summary=summary, features=features, scene_code=scene_code)
 
 
+def _execution_plan_system_prompt() -> str:
+    return (
+        "You are a principal motion designer planning a Manim scene before code is written. "
+        "Your job is to translate the transcript beat into a precise scene recipe with compact copy, clear visual logic, and a concrete beat-by-beat motion sequence. "
+        "Output ONLY a JSON object with keys summary, intuition_thesis, visual_logic, motion_spine, title_text, deck_text, layout_rules, guardrails, advanced_devices, element_plan, beat_plan. "
+        "Each element_plan item must have: element_id, role, treatment, copy_lines, source_hint, layout_intent. "
+        "Each beat_plan item must have: beat_id, focus, story_goal, motion, camera, visible_elements. "
+        "Keep text compact: title_text <= 10 words, deck_text <= 10 words, and most element copy_lines <= 6 words. "
+        "Prefer intuition, causality, and motion logic over transcript repetition."
+    )
+
+
+def _execution_plan_user_prompt(
+    brief: SceneBrief,
+    blueprint: SceneBlueprint,
+    alternatives: list[SceneBlueprint] | None = None,
+) -> str:
+    return (
+        "Scene brief:\n"
+        f"{_brief_block(brief)}\n\n"
+        "Intuition target:\n"
+        f"{_intuition_block(brief)}\n\n"
+        f"{_blueprint_block(blueprint, list(alternatives or []))}\n\n"
+        "Planning requirements:\n"
+        "- Translate the beat into a scene the viewer can understand at a glance.\n"
+        "- Assign short, readable copy to the blueprint elements instead of reusing transcript fragments.\n"
+        "- Make the motion spine explicit so the later codegen phase can execute it cleanly.\n"
+        "- Use the before/after/cause/effect fields when present.\n"
+        "- Keep title and support text compact enough to fit cleanly inside Manim layouts.\n"
+        "- If the scene family implies a route, system, morph, or interface walkthrough, reflect that in both the element assignments and beat sequence.\n"
+    )
+
+
+def _parse_execution_plan(raw_text: str, brief: SceneBrief, blueprint: SceneBlueprint) -> SceneExecutionPlan:
+    payload: dict[str, Any] = {}
+    extracted_object = ""
+    try:
+        extracted_object = extract_json_object(raw_text)
+    except Exception:
+        extracted_object = ""
+    if extracted_object:
+        try:
+            parsed = json.loads(extracted_object)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            try:
+                parsed = ast.literal_eval(extracted_object)
+                if isinstance(parsed, dict):
+                    payload = parsed
+            except Exception:
+                payload = {}
+    fallback = build_deterministic_execution_plan(brief, blueprint)
+    if not payload:
+        return fallback
+
+    title_text = _condense_copy(str(payload.get("title_text") or fallback.title_text or ""), max_words=10, max_chars=72)
+    deck_text = _condense_copy(str(payload.get("deck_text") or fallback.deck_text or ""), max_words=10, max_chars=76)
+    raw_elements = payload.get("element_plan")
+    element_plan: list[PlannedElement] = []
+    if isinstance(raw_elements, list):
+        blueprint_roles = {
+            str(element.element_id): str(element.role or "")
+            for element in blueprint.elements
+        }
+        for item in raw_elements[:12]:
+            if not isinstance(item, dict):
+                continue
+            element_id = str(item.get("element_id") or "").strip()
+            if not element_id or element_id not in blueprint_roles:
+                continue
+            raw_lines = item.get("copy_lines")
+            if isinstance(raw_lines, str):
+                raw_lines = [raw_lines]
+            lines = [
+                _condense_copy(
+                    _sanitize_plan_text(str(line or ""), max_chars=72 if blueprint_roles[element_id] == "title" else 44),
+                    max_words=10 if blueprint_roles[element_id] == "title" else 6,
+                    max_chars=72 if blueprint_roles[element_id] == "title" else 44,
+                )
+                for line in list(raw_lines or [])
+            ]
+            lines = _unique_nonempty([line for line in lines if line])
+            if blueprint_roles[element_id] == "title" and title_text:
+                lines = [title_text]
+            element_plan.append(
+                PlannedElement(
+                    element_id=element_id,
+                    role=str(item.get("role") or blueprint_roles[element_id] or ""),
+                    treatment=_sanitize_plan_text(str(item.get("treatment") or "focused_component"), max_chars=40),
+                    copy_lines=lines,
+                    source_hint=_sanitize_plan_text(str(item.get("source_hint") or ""), max_chars=40),
+                    layout_intent=_sanitize_plan_text(str(item.get("layout_intent") or ""), max_chars=90),
+                )
+            )
+    if not element_plan:
+        element_plan = fallback.element_plan
+    else:
+        existing_ids = {item.element_id for item in element_plan}
+        for item in fallback.element_plan:
+            if item.element_id not in existing_ids:
+                element_plan.append(item)
+
+    raw_beats = payload.get("beat_plan")
+    beat_plan: list[PlannedBeat] = []
+    if isinstance(raw_beats, list):
+        for item in raw_beats[:8]:
+            if not isinstance(item, dict):
+                continue
+            beat_plan.append(
+                PlannedBeat(
+                    beat_id=_sanitize_plan_text(str(item.get("beat_id") or f"beat_{len(beat_plan) + 1}"), max_chars=32),
+                    focus=_sanitize_plan_text(str(item.get("focus") or ""), max_chars=40),
+                    story_goal=_sanitize_plan_text(str(item.get("story_goal") or ""), max_chars=120),
+                    motion=_sanitize_plan_text(str(item.get("motion") or ""), max_chars=120),
+                    camera=_sanitize_plan_text(str(item.get("camera") or ""), max_chars=80),
+                    visible_elements=[
+                        _sanitize_plan_text(str(elem), max_chars=40)
+                        for elem in list(item.get("visible_elements") or [])
+                        if str(elem).strip()
+                    ][:6],
+                )
+            )
+    if not beat_plan:
+        beat_plan = fallback.beat_plan
+
+    layout_rules = [
+        _sanitize_plan_text(str(item), max_chars=110)
+        for item in list(payload.get("layout_rules") or [])
+        if str(item).strip()
+    ][:6] or fallback.layout_rules
+    guardrails = [
+        _sanitize_plan_text(str(item), max_chars=110)
+        for item in list(payload.get("guardrails") or [])
+        if str(item).strip()
+    ][:6] or fallback.guardrails
+    advanced_devices = [
+        _sanitize_plan_text(str(item), max_chars=40)
+        for item in list(payload.get("advanced_devices") or [])
+        if str(item).strip()
+    ][: max(brief.minimum_dynamic_devices + 1, 4)] or fallback.advanced_devices
+    return SceneExecutionPlan(
+        summary=_sanitize_plan_text(str(payload.get("summary") or fallback.summary), max_chars=220),
+        intuition_thesis=_sanitize_plan_text(str(payload.get("intuition_thesis") or fallback.intuition_thesis), max_chars=180),
+        visual_logic=_sanitize_plan_text(str(payload.get("visual_logic") or fallback.visual_logic), max_chars=220),
+        motion_spine=_sanitize_plan_text(str(payload.get("motion_spine") or fallback.motion_spine), max_chars=120),
+        title_text=title_text or fallback.title_text,
+        deck_text=deck_text,
+        layout_rules=layout_rules,
+        guardrails=guardrails,
+        advanced_devices=advanced_devices,
+        element_plan=element_plan,
+        beat_plan=beat_plan,
+        source="llm_plan",
+    )
+
+
+def request_scene_execution_plan(
+    provider_name: str,
+    model_name: str,
+    brief: SceneBrief,
+    blueprint: SceneBlueprint,
+    *,
+    alternative_blueprints: list[SceneBlueprint] | None = None,
+) -> SceneExecutionPlan:
+    try:
+        raw_text = call_reasoning_model(
+            provider_name,
+            model_name,
+            _execution_plan_system_prompt(),
+            _execution_plan_user_prompt(
+                brief,
+                blueprint,
+                alternatives=alternative_blueprints,
+            ),
+        )
+        return _parse_execution_plan(raw_text, brief, blueprint)
+    except Exception:
+        return build_deterministic_execution_plan(brief, blueprint)
+
+
 def request_scene_candidate(
     provider_name: str,
     model_name: str,
     brief: SceneBrief,
     examples: list[SceneExample],
     blueprint: SceneBlueprint,
+    execution_plan: SceneExecutionPlan,
     *,
     alternative_blueprints: list[SceneBlueprint] | None = None,
     previous_code: str | None = None,
@@ -505,6 +960,7 @@ def request_scene_candidate(
             examples,
             skills,
             blueprint,
+            execution_plan,
             alternative_blueprints=alternative_blueprints,
             previous_code=previous_code,
             feedback_lines=feedback_lines,
@@ -519,6 +975,7 @@ def write_generation_report(
     brief: SceneBrief,
     blueprint_candidates: list[SceneBlueprint],
     selected_blueprint: SceneBlueprint | None,
+    selected_execution_plan: SceneExecutionPlan | None,
     selected_examples: list[SceneExample],
     attempts: list[dict[str, Any]],
     final_candidate: SceneCandidate | None,
@@ -530,6 +987,7 @@ def write_generation_report(
         "scene_brief": brief.to_dict(),
         "blueprint_candidates": [item.to_dict() for item in blueprint_candidates],
         "selected_blueprint": selected_blueprint.to_dict() if selected_blueprint else None,
+        "selected_execution_plan": selected_execution_plan.to_dict() if selected_execution_plan else None,
         "selected_examples": [
             {
                 "example_id": example.example_id,

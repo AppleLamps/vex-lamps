@@ -228,6 +228,7 @@ class SceneBrief:
     must_show_terms: list[str] = field(default_factory=list)
     must_avoid: list[str] = field(default_factory=list)
     preferred_manim_features: list[str] = field(default_factory=list)
+    copy_bank: dict[str, Any] = field(default_factory=dict)
     evidence: dict[str, Any] = field(default_factory=dict)
     render_constraints: dict[str, Any] = field(default_factory=dict)
     example_tags: list[str] = field(default_factory=list)
@@ -309,6 +310,17 @@ def build_scene_brief(
         must_show_terms=_collect_must_show_terms(spec),
         must_avoid=_must_avoid_terms(spec),
         preferred_manim_features=preferred_features,
+        copy_bank={
+            "headline": str(spec.get("headline") or spec.get("emphasis_text") or "").strip(),
+            "deck": str(spec.get("deck") or spec.get("footer_text") or "").strip(),
+            "supporting_lines": [str(item).strip() for item in list(spec.get("supporting_lines") or []) if str(item).strip()],
+            "steps": [str(item).strip() for item in list(spec.get("steps") or []) if str(item).strip()],
+            "keywords": [str(item).strip() for item in list(spec.get("keywords") or []) if str(item).strip()],
+            "left_detail": str(spec.get("left_detail") or "").strip(),
+            "right_detail": str(spec.get("right_detail") or "").strip(),
+            "footer_text": str(spec.get("footer_text") or "").strip(),
+            "sentence_text": str(spec.get("sentence_text") or "").strip(),
+        },
         evidence=dict(spec.get("evidence") or {}),
         render_constraints={
             "width": width,

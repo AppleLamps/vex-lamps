@@ -1466,6 +1466,37 @@ def _normalize_visual_plan(
             spec["keywords"] = card["keywords"][:4] or [headline]
         if template in {"timeline_steps", "system_flow", "kinetic_route", "signal_network"} and not steps:
             spec["steps"] = _steps_for_card(card) or ([headline, emphasis_text, footer_text[:28]] if footer_text else [headline, emphasis_text])[:4]
+        if template in {"timeline_steps", "system_flow", "kinetic_route", "signal_network"}:
+            semantic_frame = dict(card.get("semantic_frame") or {})
+            semantic_before = _polish_visual_copy(
+                semantic_frame.get("before_state") or "",
+                max_words=text_limits["step_words"],
+                max_chars=text_limits["step_chars"],
+            )
+            semantic_after = _polish_visual_copy(
+                semantic_frame.get("after_state") or "",
+                max_words=text_limits["step_words"],
+                max_chars=text_limits["step_chars"],
+            )
+            semantic_steps = []
+            for value in [semantic_before, semantic_after]:
+                lowered = value.lower()
+                if value and lowered not in {item.lower() for item in semantic_steps}:
+                    semantic_steps.append(value)
+            existing_steps = list(spec.get("steps") or [])
+            weak_route_steps = not existing_steps or (
+                semantic_after
+                and all(
+                    str(step).strip().lower() in semantic_after.lower()
+                    or semantic_after.lower().startswith(str(step).strip().lower())
+                    for step in existing_steps
+                    if str(step).strip()
+                )
+            )
+            if semantic_steps and (weak_route_steps or len(existing_steps) < 2):
+                spec["steps"] = semantic_steps[:3]
+            if semantic_after and not list(spec.get("supporting_lines") or []):
+                spec["supporting_lines"] = [semantic_after]
         if template in {"metric_callout", "stat_grid", "data_journey"} and not supporting_lines:
             spec["supporting_lines"] = _supporting_lines_for_card(card)[:3]
         if short_slot:
