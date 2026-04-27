@@ -111,12 +111,35 @@ def _filter_previously_used_cards(
     *,
     max_visuals: int,
 ) -> list[dict[str, object]]:
-    if not used_card_ids:
-        return list(cards)
+    if not cards:
+        return []
+    prepared: list[dict[str, object]] = []
     fresh_cards = [card for card in cards if str(card.get("card_id") or "") not in used_card_ids]
-    if len(fresh_cards) >= max_visuals:
-        return fresh_cards
-    return list(cards)
+    fresh_only_mode = bool(used_card_ids) and len(fresh_cards) >= max_visuals
+    for card in cards:
+        normalized = dict(card)
+        card_id = str(normalized.get("card_id") or "").strip()
+        original_priority = float(normalized.get("priority") or 0.0)
+        recently_used = card_id in used_card_ids
+        normalized["original_priority"] = original_priority
+        normalized["recently_used"] = recently_used
+        if recently_used:
+            normalized["priority"] = round(original_priority - (32.0 if fresh_only_mode else 18.0), 2)
+        else:
+            normalized["priority"] = round(original_priority + 4.0, 2)
+        prepared.append(normalized)
+    if fresh_only_mode:
+        prepared = [item for item in prepared if not bool(item.get("recently_used"))]
+    ranked = sorted(
+        prepared,
+        key=lambda item: (
+            1 if not bool(item.get("recently_used")) else 0,
+            float(item.get("priority") or 0.0),
+            -float(item.get("start") or 0.0),
+        ),
+        reverse=True,
+    )
+    return ranked
 
 
 def _refresh_existing_auto_overlays(state: ProjectState) -> dict[str, int]:
@@ -295,9 +318,8 @@ def execute(params: dict, state: ProjectState) -> dict:
             blocked_ranges,
             min_duration_sec=max(0.45, min_visual_sec * 0.5),
         )
-        if not refreshed_auto_overlay_counts:
-            prior_card_ids = _prior_auto_visual_card_ids(state)
-            cards = _filter_previously_used_cards(cards, prior_card_ids, max_visuals=max_visuals)
+        prior_card_ids = _prior_auto_visual_card_ids(state)
+        cards = _filter_previously_used_cards(cards, prior_card_ids, max_visuals=max_visuals)
         if not cards:
             raise RuntimeError("No transcript-aligned visual cards were available for planning after respecting existing full-screen overlay windows.")
         provider_name, model_name = _provider_and_model(state)
@@ -316,6 +338,8 @@ def execute(params: dict, state: ProjectState) -> dict:
             max_visual_sec=max_visual_sec,
             scene_cuts=scene_cuts,
             available_renderers=capabilities,
+            avoid_card_ids=prior_card_ids,
+            disable_fast_plan=bool(prior_card_ids),
         )
         plan = restrict_timed_items_to_available_ranges(
             plan,

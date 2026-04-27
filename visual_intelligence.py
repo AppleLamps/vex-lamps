@@ -1241,7 +1241,10 @@ def analyze_visual_plan_with_llm(
     scene_cuts: list[float],
     *,
     available_renderers: list[dict[str, Any]] | None = None,
+    avoid_card_ids: set[str] | None = None,
+    disable_fast_plan: bool = False,
 ) -> list[dict[str, Any]]:
+    avoid_card_ids = {str(card_id).strip() for card_id in (avoid_card_ids or set()) if str(card_id).strip()}
     fallback = fallback_visual_plan(
         cards,
         clip_duration,
@@ -1255,10 +1258,16 @@ def analyze_visual_plan_with_llm(
         return fallback
 
     candidate_cards = _candidate_pool(cards, max_visuals)
-    if _should_use_fast_plan(candidate_cards, max_visuals):
+    if not disable_fast_plan and _should_use_fast_plan(candidate_cards, max_visuals):
         return fallback
     template_lines = "\n".join(f"- {name}: {description}" for name, description in SUPPORTED_TEMPLATES.items())
     renderer_lines = _format_renderer_capabilities(available_renderers)
+    avoid_card_line = (
+        "Previously used card_ids to avoid unless absolutely necessary:\n"
+        f"{', '.join(sorted(avoid_card_ids))}\n\n"
+        if avoid_card_ids
+        else ""
+    )
     system_prompt = (
         "You are a senior motion graphics director planning precise generated visuals for an explainer video. "
         "Choose only transcript beats where a custom animation would make the spoken idea clearer. "
@@ -1284,6 +1293,7 @@ def analyze_visual_plan_with_llm(
         "- picture_in_picture: keep the source visible and place the visual in a corner\n\n"
         "Style packs:\n"
         "- editorial_clean\n- bold_tech\n- documentary_kinetic\n- product_ui\n- cinematic_night\n- signal_lab\n- magazine_luxe\n\n"
+        f"{avoid_card_line}"
         f"Candidate transcript cards:\n{truncate(_format_cards_for_llm(candidate_cards), 8200)}\n\n"
         "Pick the strongest beats only. Avoid generic filler. "
         "Favor data_journey for quantitative replace beats, signal_network or kinetic_route for process beats, spotlight_compare for contrasts, interface_cascade for UI/product beats, and ribbon_quote only when the line is truly memorable. "
@@ -1323,6 +1333,7 @@ def analyze_visual_plan_with_llm(
     critic_user_prompt = (
         "Renderer capabilities:\n"
         f"{renderer_lines}\n\n"
+        f"{avoid_card_line}"
         "Original candidate cards:\n"
         f"{truncate(_format_cards_for_llm(candidate_cards), 6200)}\n\n"
         "Director plan to critique:\n"

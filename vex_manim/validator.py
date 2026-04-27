@@ -64,9 +64,7 @@ ADVANCED_FEATURE_NAMES = {
 
 TEX_DEPENDENT_NAMES = {
     "BarChart",
-    "DecimalNumber",
     "DecimalTable",
-    "Integer",
     "MathTex",
     "MathTable",
     "Tex",

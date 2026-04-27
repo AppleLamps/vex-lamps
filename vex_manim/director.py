@@ -77,6 +77,15 @@ RATE_FUNCTION_NAMES = {
     "ease_in_elastic",
     "ease_out_elastic",
     "ease_in_out_elastic",
+    "sine_in",
+    "sine_out",
+    "sine_in_out",
+}
+
+RATE_FUNCTION_ALIASES = {
+    "sine_in": "ease_in_sine",
+    "sine_out": "ease_out_sine",
+    "sine_in_out": "ease_in_out_sine",
 }
 
 ANIMATION_CALL_NAMES = {
@@ -225,7 +234,8 @@ def _user_prompt(
     latex_note = ""
     if not bool(brief.render_constraints.get("latex_available", True)):
         latex_note = (
-            "\n- LaTeX is NOT available in this runtime. Avoid Tex, MathTex, DecimalNumber, BarChart, Integer, and any TeX-dependent mobjects or default chart labels that route through MathTex."
+            "\n- LaTeX is NOT available in this runtime. Avoid Tex, MathTex, BarChart, Matrix, Variable, and any TeX-dependent labels."
+            "\n- Vex provides runtime-safe DecimalNumber and Integer text shims, so numeric badges/counters are still fine."
         )
     contract_block = "\n".join(f"- {item}" for item in brief.scene_contract)
     return (
@@ -298,6 +308,15 @@ def _repair_scene_code(scene_code: str) -> str:
         return cleaned
 
     class HelperQualifier(ast.NodeTransformer):
+        @staticmethod
+        def _rate_function_attribute(name: str) -> ast.Attribute:
+            canonical = RATE_FUNCTION_ALIASES.get(name, name)
+            return ast.Attribute(
+                value=ast.Attribute(value=ast.Name(id="manim", ctx=ast.Load()), attr="rate_functions", ctx=ast.Load()),
+                attr=canonical,
+                ctx=ast.Load(),
+            )
+
         def visit_Call(self, node: ast.Call) -> ast.AST:
             self.generic_visit(node)
             if isinstance(node.func, ast.Attribute) and len(node.args) == 1:
@@ -329,11 +348,22 @@ def _repair_scene_code(scene_code: str) -> str:
 
         def visit_Name(self, node: ast.Name) -> ast.AST:
             if isinstance(node.ctx, ast.Load) and node.id in RATE_FUNCTION_NAMES:
-                return ast.Attribute(
-                    value=ast.Attribute(value=ast.Name(id="manim", ctx=ast.Load()), attr="rate_functions", ctx=ast.Load()),
-                    attr=node.id,
-                    ctx=ast.Load(),
-                )
+                return self._rate_function_attribute(node.id)
+            return node
+
+        def visit_Attribute(self, node: ast.Attribute) -> ast.AST:
+            self.generic_visit(node)
+            short_name = node.attr
+            if short_name not in RATE_FUNCTION_NAMES:
+                return node
+            qualified_name = _call_name(node)
+            if qualified_name in {
+                f"utils.{short_name}",
+                f"rate_functions.{short_name}",
+                f"manim.utils.{short_name}",
+                f"manim.rate_functions.{short_name}",
+            }:
+                return self._rate_function_attribute(short_name)
             return node
 
     repaired_tree = ast.fix_missing_locations(HelperQualifier().visit(tree))

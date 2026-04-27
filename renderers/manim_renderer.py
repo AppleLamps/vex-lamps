@@ -607,7 +607,25 @@ def _latex_runtime_ready(probe_root: Path) -> bool:
     if result.returncode != 0:
         _LATEX_RUNTIME_READY_CACHE = False
         return False
-    _LATEX_RUNTIME_READY_CACHE = (probe_dir / "probe.dvi").is_file()
+    dvi_path = probe_dir / "probe.dvi"
+    dvisvgm_binary = shutil.which("dvisvgm")
+    if not dvi_path.is_file() or not dvisvgm_binary:
+        _LATEX_RUNTIME_READY_CACHE = False
+        return False
+    svg_path = probe_dir / "probe.svg"
+    svg_command = [
+        dvisvgm_binary,
+        str(dvi_path),
+        "-n",
+        "-o",
+        str(svg_path),
+    ]
+    try:
+        svg_result = subprocess.run(svg_command, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired):
+        _LATEX_RUNTIME_READY_CACHE = False
+        return False
+    _LATEX_RUNTIME_READY_CACHE = svg_result.returncode == 0 and svg_path.is_file()
     return _LATEX_RUNTIME_READY_CACHE
 
 
@@ -978,7 +996,7 @@ class ManimRenderer(VisualRenderer):
             brief,
             history_roots=_history_roots(spec),
             limit=_example_limit_for_brief(brief),
-            forbidden_features={"DecimalNumber", "BarChart", "MathTex", "Tex", "Matrix", "Integer", "Variable"} if not latex_available else None,
+            forbidden_features={"BarChart", "MathTex", "Tex", "Matrix", "Variable"} if not latex_available else None,
             preferred_tags=selected_blueprint.prompt_terms(),
             preferred_features=selected_blueprint.suggested_features,
         )

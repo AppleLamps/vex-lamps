@@ -5,6 +5,7 @@ import math
 import re
 from typing import Any
 
+import manim
 from manim import (
     Arc,
     ArcBetweenPoints,
@@ -22,6 +23,7 @@ from manim import (
     MEDIUM,
     MovingCameraScene,
     NORMAL,
+    ORIGIN,
     Rectangle,
     RIGHT,
     RoundedRectangle,
@@ -30,6 +32,17 @@ from manim import (
     VGroup,
     VMobject,
 )
+
+
+CENTER = ORIGIN
+utils = manim.rate_functions
+rate_functions = manim.rate_functions
+ease_in_sine = manim.rate_functions.ease_in_sine
+ease_out_sine = manim.rate_functions.ease_out_sine
+ease_in_out_sine = manim.rate_functions.ease_in_out_sine
+sine_in = ease_in_sine
+sine_out = ease_out_sine
+sine_in_out = ease_in_out_sine
 
 
 THEME_DEFAULTS = {
@@ -45,6 +58,81 @@ THEME_DEFAULTS = {
     "text_primary": "#F8FAFC",
     "text_secondary": "#CBD5E1",
 }
+
+
+def _format_numeric_text(
+    value: Any,
+    *,
+    num_decimal_places: int = 0,
+    include_sign: bool = False,
+    group_with_commas: bool = False,
+) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if num_decimal_places <= 0:
+        rendered = f"{int(round(numeric))}"
+    else:
+        rendered = f"{numeric:.{int(num_decimal_places)}f}"
+    if group_with_commas:
+        if "." in rendered:
+            whole, frac = rendered.split(".", 1)
+            whole = f"{int(whole):,}"
+            rendered = f"{whole}.{frac}"
+        else:
+            rendered = f"{int(rendered):,}"
+    if include_sign and numeric > 0 and not rendered.startswith("+"):
+        rendered = f"+{rendered}"
+    return rendered
+
+
+def DecimalNumber(
+    number: Any = 0,
+    *,
+    num_decimal_places: int = 0,
+    include_sign: bool = False,
+    group_with_commas: bool = False,
+    font_size: float = 36,
+    color: Any | None = None,
+    weight=BOLD,
+    slant=NORMAL,
+    **_: Any,
+) -> Text:
+    return Text(
+        _format_numeric_text(
+            number,
+            num_decimal_places=num_decimal_places,
+            include_sign=include_sign,
+            group_with_commas=group_with_commas,
+        ),
+        font_size=font_size,
+        color=color,
+        weight=weight,
+        slant=slant,
+    )
+
+
+def Integer(
+    number: Any = 0,
+    *,
+    group_with_commas: bool = False,
+    font_size: float = 36,
+    color: Any | None = None,
+    weight=BOLD,
+    slant=NORMAL,
+    **kwargs: Any,
+) -> Text:
+    return DecimalNumber(
+        number,
+        num_decimal_places=0,
+        group_with_commas=group_with_commas,
+        font_size=font_size,
+        color=color,
+        weight=weight,
+        slant=slant,
+        **kwargs,
+    )
 
 ROLE_PRIORITIES = {
     "background": 100,
@@ -474,6 +562,7 @@ class VexGeneratedScene(MovingCameraScene):
         curve_height: float | None = None,
         opacity: float = 0.92,
         path_points: Any = None,
+        points: Any = None,
         start_point: Any = None,
         end_point: Any = None,
         from_point: Any = None,
@@ -482,6 +571,8 @@ class VexGeneratedScene(MovingCameraScene):
     ):
         if path_points is not None:
             start = path_points
+        elif points is not None:
+            start = points
         start = start if start is not None else start_point if start_point is not None else from_point
         end = end if end is not None else end_point if end_point is not None else to_point
         if start is None or end is None:
