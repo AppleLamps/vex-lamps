@@ -175,6 +175,22 @@ GENERIC_ABSTRACT_TERMS = {
     "growth", "learn", "lesson", "motivation", "strategy", "value", "important", "useful",
     "future", "success", "mind", "creative", "belief", "hard", "easy", "powerful",
 }
+NEGATIVE_STATE_MARKERS = {
+    "not", "never", "stuck", "forgot", "forget", "passive", "consume", "consuming",
+    "watch", "watching", "tutorial", "tutorials", "read", "reading", "notes", "waste",
+    "wrong", "problem", "without", "doesn't", "dont", "don't",
+}
+POSITIVE_STATE_MARKERS = {
+    "build", "building", "ship", "shipping", "practice", "practicing", "start",
+    "starting", "directly", "active", "learn", "learning", "retain", "retention",
+    "apply", "applying", "feedback", "improve", "making", "create", "creating",
+}
+CAUSE_MARKERS = {
+    "because", "when", "if", "so", "since", "after", "then", "consume", "watch", "read", "notes",
+}
+EFFECT_MARKERS = {
+    "stuck", "forgot", "forget", "slow", "confused", "nothing", "doesn't", "dont", "don't",
+}
 FILLER_LEAD_WORDS = {
     "the", "a", "an", "this", "that", "these", "those", "we", "you", "it", "they", "our",
     "your", "their", "to", "for", "with", "by", "in", "on", "of", "but", "so", "because",
@@ -459,9 +475,166 @@ def _steps_for_card(card: dict[str, Any]) -> list[str]:
     return deduped[:4]
 
 
+def _marker_hits(text: str, markers: set[str]) -> int:
+    lowered = str(text or "").lower()
+    return sum(1 for marker in markers if re.search(rf"\b{re.escape(marker)}\b", lowered))
+
+
+def _pick_marked_fragment(
+    fragments: list[str],
+    *,
+    preferred_markers: set[str],
+    avoid_texts: set[str] | None = None,
+    max_words: int = 6,
+    max_chars: int = 40,
+) -> str:
+    avoid_texts = {item.lower() for item in (avoid_texts or set()) if item}
+    ranked = sorted(
+        fragments,
+        key=lambda fragment: (
+            _marker_hits(fragment, preferred_markers),
+            len(_tokens(fragment)),
+        ),
+        reverse=True,
+    )
+    for fragment in ranked:
+        cleaned = _polish_visual_copy(fragment, max_words=max_words, max_chars=max_chars)
+        lowered = cleaned.lower()
+        if not cleaned or lowered in avoid_texts:
+            continue
+        if _marker_hits(fragment, preferred_markers) <= 0:
+            continue
+        return cleaned
+    return ""
+
+
+def _derive_semantic_frame(
+    *,
+    sentence_text: str,
+    context_text: str,
+    previous_text: str,
+    next_text: str,
+    visual_type_hint: str,
+    numeric_hits: int,
+    process_cues: float,
+    contrast_cues: float,
+) -> dict[str, str]:
+    story_window = truncate(" ".join(item for item in [previous_text, sentence_text, next_text] if item).strip(), 320)
+    full_context = ". ".join(item for item in [previous_text, sentence_text, next_text, context_text] if item).strip()
+    fragments = _split_fragments(full_context, limit=10)
+    headline_seed = _display_case(_distill_phrase(sentence_text or context_text, max_words=6, max_chars=42))
+    before_state = _pick_marked_fragment(
+        fragments,
+        preferred_markers=NEGATIVE_STATE_MARKERS,
+        max_words=5,
+        max_chars=34,
+    )
+    after_state = _pick_marked_fragment(
+        fragments,
+        preferred_markers=POSITIVE_STATE_MARKERS,
+        avoid_texts={before_state},
+        max_words=5,
+        max_chars=34,
+    )
+    cause = _pick_marked_fragment(
+        fragments,
+        preferred_markers=CAUSE_MARKERS,
+        avoid_texts={before_state, after_state},
+        max_words=6,
+        max_chars=42,
+    )
+    effect = _pick_marked_fragment(
+        fragments,
+        preferred_markers=EFFECT_MARKERS,
+        avoid_texts={before_state, after_state, cause},
+        max_words=6,
+        max_chars=40,
+    )
+    if not before_state and fragments:
+        before_state = _polish_visual_copy(fragments[0], max_words=5, max_chars=34)
+    if not after_state:
+        fallback_after = next_text or context_text or sentence_text
+        after_state = _polish_visual_copy(fallback_after, max_words=5, max_chars=34)
+    if not cause:
+        cause = _polish_visual_copy(sentence_text or context_text, max_words=6, max_chars=42)
+    if not effect:
+        effect = _polish_visual_copy(context_text or next_text or sentence_text, max_words=6, max_chars=40)
+
+    numeric_signal = bool(
+        re.search(r"\b\d+(?:\.\d+)?(?:%|x)\b", full_context, flags=re.IGNORECASE)
+        or numeric_hits >= 2
+        or (numeric_hits >= 1 and visual_type_hint == "data_graphic")
+    )
+    ordinal_or_method = bool(re.search(r"\b(?:method|step|part|chapter|tip)\s+\d+\b", full_context, flags=re.IGNORECASE))
+    negative_before = _marker_hits(before_state, NEGATIVE_STATE_MARKERS) > 0
+    positive_after = _marker_hits(after_state, POSITIVE_STATE_MARKERS) > 0
+
+    if numeric_signal and not ordinal_or_method:
+        intuition_mode = "metric_proof"
+    elif before_state and after_state and before_state.lower() != after_state.lower() and negative_before and positive_after:
+        intuition_mode = "misconception_flip" if (contrast_cues >= 0.12 or re.search(r"\bbut\b|\binstead\b|don't|doesn't", full_context, flags=re.IGNORECASE)) else "process_route"
+    elif contrast_cues >= 0.24 and before_state and after_state and before_state.lower() != after_state.lower():
+        intuition_mode = "misconception_flip"
+    elif process_cues >= 0.42 and before_state and after_state:
+        intuition_mode = "process_route"
+    elif _marker_hits(full_context, CAUSE_MARKERS) > 0 and _marker_hits(full_context, EFFECT_MARKERS) > 0:
+        intuition_mode = "causal_chain"
+    elif visual_type_hint == "product_ui":
+        intuition_mode = "interface_walkthrough"
+    else:
+        intuition_mode = "concept_emphasis"
+
+    if intuition_mode == "metric_proof":
+        mental_model = "Ground the spoken claim in concrete evidence the viewer can track."
+        viewer_takeaway = headline_seed or after_state
+        visual_metaphor = "tracked_metric"
+    elif intuition_mode == "misconception_flip":
+        mental_model = f"Show why {before_state} fails and why {after_state} works."
+        viewer_takeaway = after_state or headline_seed
+        visual_metaphor = "state_transition"
+    elif intuition_mode == "process_route":
+        mental_model = f"Show the journey from {before_state} to {after_state} as a repeatable process."
+        viewer_takeaway = after_state or headline_seed
+        visual_metaphor = "route_progression"
+    elif intuition_mode == "causal_chain":
+        mental_model = f"Make the causal link legible: {cause} -> {effect}."
+        viewer_takeaway = effect or after_state or headline_seed
+        visual_metaphor = "causal_flow"
+    elif intuition_mode == "interface_walkthrough":
+        mental_model = f"Show the interaction path that leads to {after_state or headline_seed}."
+        viewer_takeaway = after_state or headline_seed
+        visual_metaphor = "interface_cascade"
+    else:
+        mental_model = f"Give the abstract idea a concrete visual anchor around {headline_seed or after_state}."
+        viewer_takeaway = headline_seed or after_state
+        visual_metaphor = "kinetic_focus"
+
+    return {
+        "intuition_mode": intuition_mode,
+        "story_window": story_window,
+        "before_state": before_state,
+        "after_state": after_state,
+        "cause": cause,
+        "effect": effect,
+        "mental_model": truncate(mental_model, 180),
+        "viewer_takeaway": truncate(viewer_takeaway, 64),
+        "visual_metaphor": visual_metaphor,
+    }
+
+
 def _comparison_terms_for_card(card: dict[str, Any]) -> tuple[str, str, str, str]:
     sentence = str(card.get("sentence_text") or "")
     context = str(card.get("context_text") or "")
+    semantic_frame = dict(card.get("semantic_frame") or {})
+    before_state = str(semantic_frame.get("before_state") or "").strip()
+    after_state = str(semantic_frame.get("after_state") or "").strip()
+    if before_state and after_state and before_state.lower() != after_state.lower():
+        return (
+            "Before",
+            "After",
+            _polish_visual_copy(before_state, max_words=5, max_chars=34),
+            _polish_visual_copy(after_state, max_words=5, max_chars=34),
+        )
     lowered = sentence.lower()
     from_to = re.search(r"\bfrom\s+(.+?)\s+to\s+(.+?)(?:[.,;]|$)", sentence, flags=re.IGNORECASE)
     if from_to:
@@ -504,6 +677,10 @@ def _eyebrow_for_card(card: dict[str, Any], template: str) -> str:
 
 
 def _deck_for_card(card: dict[str, Any], headline: str) -> str:
+    semantic_frame = dict(card.get("semantic_frame") or {})
+    takeaway = str(semantic_frame.get("viewer_takeaway") or "").strip()
+    if takeaway and takeaway.lower() != headline.lower():
+        return truncate(takeaway, 46)
     for line in _supporting_lines_for_card(card):
         if line.lower() != headline.lower():
             return truncate(line, 46)
@@ -594,6 +771,15 @@ def _default_template(card: dict[str, Any]) -> str:
     numbers = int(card["sentence_numeric_hits"]) if "sentence_numeric_hits" in card else int(card.get("numeric_hits") or 0)
     process_cues = float(card["sentence_process_cues"]) if "sentence_process_cues" in card else float(card.get("process_cues") or 0.0)
     contrast_cues = float(card["sentence_contrast_cues"]) if "sentence_contrast_cues" in card else float(card.get("contrast_cues") or 0.0)
+    intuition_mode = str((card.get("semantic_frame") or {}).get("intuition_mode") or card.get("intuition_mode") or "").strip().lower()
+    if intuition_mode == "metric_proof":
+        return "data_journey"
+    if intuition_mode == "misconception_flip":
+        return "spotlight_compare"
+    if intuition_mode in {"process_route", "causal_chain"}:
+        return "signal_network" if len(card.get("keywords") or []) >= 3 else "kinetic_route"
+    if intuition_mode == "interface_walkthrough":
+        return "interface_cascade"
     if numbers >= 1 and contrast_cues < 0.34:
         return "data_journey"
     if process_cues >= 0.42:
@@ -734,9 +920,15 @@ def build_visual_context_cards(
         if index > 1:
             prev = sentences[index - 2]
             pause_before = max(0.0, start_sec - float(prev.get("end") or start_sec))
+            previous_text = truncate(str(prev.get("text") or ""), 180)
+        else:
+            previous_text = ""
         if index < total_sentences:
             nxt = sentences[index]
             pause_after = max(0.0, float(nxt.get("start") or end_sec) - end_sec)
+            next_text = truncate(str(nxt.get("text") or ""), 180)
+        else:
+            next_text = ""
         word_count = len(card_words)
         words_per_second = round(word_count / max(end_sec - start_sec, 0.15), 2) if word_count else 0.0
         keywords = semantic_keywords(f"{sentence_text} {context_text}", limit=8)
@@ -767,6 +959,16 @@ def build_visual_context_cards(
             generic_penalty=generic_penalty,
             replace_safety=replace_safety,
         )
+        semantic_frame = _derive_semantic_frame(
+            sentence_text=sentence_text,
+            context_text=context_text,
+            previous_text=previous_text,
+            next_text=next_text,
+            visual_type_hint=visual_type_hint,
+            numeric_hits=numeric_hits,
+            process_cues=process_cues,
+            contrast_cues=contrast_cues,
+        )
         suggested_composition = (
             "replace"
             if replace_safety >= 0.63 and visualizability >= 0.58 and visual_type_hint not in {"data_graphic", "product_ui"}
@@ -779,6 +981,8 @@ def build_visual_context_cards(
             "end": round(end_sec, 2),
             "sentence_text": sentence_text,
             "context_text": context_text,
+            "previous_text": previous_text,
+            "next_text": next_text,
             "keywords": keywords,
             "visual_type_hint": visual_type_hint,
             "word_count": word_count,
@@ -798,6 +1002,8 @@ def build_visual_context_cards(
             "proper_nouns": proper_nouns,
             "replace_safety": replace_safety,
             "visualizability": visualizability,
+            "semantic_frame": semantic_frame,
+            "intuition_mode": semantic_frame.get("intuition_mode", ""),
             "suggested_composition": suggested_composition,
             "style_pack": style_pack,
             "suggested_renderer": _default_renderer_hint({"visual_type_hint": visual_type_hint}),
@@ -815,7 +1021,15 @@ def _format_cards_for_llm(cards: list[dict[str, Any]]) -> str:
                 [
                     f"{card['card_id']} | {card['start']:.2f}-{card['end']:.2f} | priority={card['priority']:.2f}",
                     f"Sentence: {card['sentence_text']}",
+                    f"Prev/Next: {card.get('previous_text', '')} || {card.get('next_text', '')}",
                     f"Context: {card['context_text']}",
+                    (
+                        "Intuition: "
+                        f"mode={card.get('semantic_frame', {}).get('intuition_mode', '')} | "
+                        f"before={card.get('semantic_frame', {}).get('before_state', '')} | "
+                        f"after={card.get('semantic_frame', {}).get('after_state', '')} | "
+                        f"takeaway={card.get('semantic_frame', {}).get('viewer_takeaway', '')}"
+                    ),
                     f"Keywords: {', '.join(card['keywords'])}",
                     f"Hint: {card['visual_type_hint']} | renderer={card['suggested_renderer']} | style={card['style_pack']}",
                     (
@@ -1187,6 +1401,9 @@ def _normalize_visual_plan(
             "duration": round(end_sec - start_sec, 2),
             "sentence_text": card["sentence_text"],
             "context_text": card["context_text"],
+            "previous_text": card.get("previous_text", ""),
+            "next_text": card.get("next_text", ""),
+            "semantic_frame": dict(card.get("semantic_frame") or {}),
             "keywords": card["keywords"][:8],
             "visual_type_hint": card["visual_type_hint"],
             "template": template,

@@ -672,6 +672,7 @@ def _candidate_blueprints(brief: SceneBrief) -> list[SceneBlueprint]:
 
 def _score_blueprint(brief: SceneBrief, blueprint: SceneBlueprint) -> float:
     score = 0.0
+    archetype = blueprint.archetype.lower()
     score += 5.0 if blueprint.scene_family == brief.scene_family else 1.5
     preferred = set(brief.preferred_manim_features)
     score += len(preferred.intersection(blueprint.suggested_features)) * 0.38
@@ -696,6 +697,31 @@ def _score_blueprint(brief: SceneBrief, blueprint: SceneBlueprint) -> float:
         score += 0.38
     if brief.scene_family in {"kinetic_quote", "kinetic_stack"} and "focus_beam" in blueprint.dynamic_devices:
         score += 0.22
+    if brief.intuition_mode == "misconception_flip" and any(
+        token in archetype for token in {"morph", "transition", "bridge"}
+    ):
+        score += 0.72
+    if brief.intuition_mode == "process_route" and any(
+        token in archetype for token in {"route", "journey", "river", "lane"}
+    ):
+        score += 0.68
+    if brief.intuition_mode == "causal_chain" and any(
+        token in archetype for token in {"signal", "hub", "river", "bridge"}
+    ):
+        score += 0.66
+    if brief.intuition_mode == "metric_proof" and any(
+        token in archetype for token in {"metric", "dashboard"}
+    ):
+        score += 0.62
+    if brief.intuition_mode == "concept_emphasis" and any(
+        token in archetype for token in {"ribbon", "word", "focus"}
+    ):
+        score += 0.44
+    if brief.before_state and brief.after_state and any(
+        source in {"left_detail", "right_detail", "steps", "supporting_lines"}
+        for source in [element.copy_source for element in blueprint.elements]
+    ):
+        score += 0.28
     return round(score, 3)
 
 

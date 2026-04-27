@@ -208,6 +208,28 @@ def _blueprint_block(blueprint: SceneBlueprint, alternatives: list[SceneBlueprin
     return "\n".join(lines)
 
 
+def _intuition_block(brief: SceneBrief) -> str:
+    lines = [
+        f"Mode: {brief.intuition_mode or 'general'}",
+        f"Mental model: {brief.mental_model or brief.objective}",
+    ]
+    if brief.before_state:
+        lines.append(f"Before state: {brief.before_state}")
+    if brief.after_state:
+        lines.append(f"After state: {brief.after_state}")
+    if brief.cause:
+        lines.append(f"Cause: {brief.cause}")
+    if brief.effect:
+        lines.append(f"Effect: {brief.effect}")
+    if brief.viewer_takeaway:
+        lines.append(f"Viewer takeaway: {brief.viewer_takeaway}")
+    if brief.visual_metaphor:
+        lines.append(f"Suggested visual metaphor: {brief.visual_metaphor}")
+    if brief.story_window:
+        lines.append(f"Story window: {truncate(brief.story_window, 220)}")
+    return "\n".join(lines)
+
+
 def _system_prompt() -> str:
     return (
         "You are a principal motion designer and senior Manim engineer writing production-quality animation code. "
@@ -251,6 +273,8 @@ def _user_prompt(
     return (
         "Scene brief:\n"
         f"{_brief_block(brief)}\n\n"
+        "Intuition target:\n"
+        f"{_intuition_block(brief)}\n\n"
         "Relevant Manim skill slices:\n"
         f"{_skills_block(skills)}\n\n"
         f"{_blueprint_block(blueprint, list(alternative_blueprints or []))}\n\n"
@@ -263,6 +287,8 @@ def _user_prompt(
         "- Add the title treatment with make_title_block unless the scene has a stronger editorial framing.\n"
         "- Call runtime helpers as self.make_title_block(...), self.make_orbit_ring(...), self.camera_focus(...), and so on; never use bare helper calls.\n"
         "- Honor the selected blueprint's focal system, motion beats, and element roles; do not collapse it into generic panels or stacked text boxes.\n"
+        "- Make the mental-model shift legible: the viewer should understand why the idea works, not just read the subtitle again.\n"
+        "- Use the before/after/cause/effect context when present; convert it into visual logic, not extra prose.\n"
         "- If the blueprint uses a route, orbit, bridge, ladder, sweep, or focus lane, that motion spine must remain visible in the final scene.\n"
         "- Register the principal visible groups with register_layout_group(name, group, role=...) so runtime layout guardrails can keep the scene clean.\n"
         "- Register at least a title/hero group and one or two supporting groups whenever they exist.\n"

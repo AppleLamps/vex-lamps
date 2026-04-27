@@ -72,10 +72,16 @@ def _animation_intensity(spec: dict[str, Any], scene_family: str) -> str:
 
 def _collect_must_show_terms(spec: dict[str, Any]) -> list[str]:
     values: list[str] = []
+    semantic_items = (
+        list((spec.get("semantic_frame") or {}).values())
+        if isinstance(spec.get("semantic_frame"), dict)
+        else []
+    )
     for item in [
         spec.get("headline"),
         spec.get("deck"),
         spec.get("emphasis_text"),
+        *semantic_items,
         *(spec.get("supporting_lines") or []),
         *(spec.get("steps") or []),
         *(spec.get("keywords") or []),
@@ -103,11 +109,21 @@ def _must_avoid_terms(spec: dict[str, Any]) -> list[str]:
         avoid.append("fake data without numeric grounding")
     if visual_type == "process":
         avoid.append("unconnected cards with no flow")
+    semantic_frame = dict(spec.get("semantic_frame") or {})
+    intuition_mode = str(semantic_frame.get("intuition_mode") or "").strip().lower()
+    if intuition_mode in {"misconception_flip", "causal_chain"}:
+        avoid.append("showing the symptom without the corrected mental model")
+    if intuition_mode == "process_route":
+        avoid.append("presenting the process as isolated facts instead of a journey")
     return avoid
 
 
 def _objective(spec: dict[str, Any], scene_family: str) -> str:
     headline = str(spec.get("headline") or spec.get("emphasis_text") or "Key point").strip()
+    semantic_frame = dict(spec.get("semantic_frame") or {})
+    mental_model = str(semantic_frame.get("mental_model") or "").strip()
+    if mental_model:
+        return mental_model
     if scene_family == "comparison_morph":
         return f"Make the change from one state to another instantly legible: {headline}"
     if scene_family in {"system_map", "timeline_journey"}:
@@ -162,6 +178,14 @@ def _scene_contract(
         contract.append("Show clear directional flow with a route, network, or travelling signal instead of disconnected stages.")
     if scene_family == "comparison_morph":
         contract.append("Explain the difference through morphing or matched motion, not two isolated layouts.")
+    semantic_frame = dict(spec.get("semantic_frame") or {})
+    intuition_mode = str(semantic_frame.get("intuition_mode") or "").strip().lower()
+    if intuition_mode == "misconception_flip":
+        contract.append("Make the wrong mental model visibly collapse into the better one so the viewer feels the shift.")
+    elif intuition_mode == "causal_chain":
+        contract.append("Expose the hidden cause-and-effect relationship, not just the surface statement.")
+    elif intuition_mode == "process_route":
+        contract.append("Make the progression or loop legible enough that the viewer could mentally replay it afterward.")
     if camera_style in {"guided", "punch_in"}:
         contract.append("Include at least one meaningful camera reframe or punch-in to control attention.")
     if animation_intensity in {"medium", "high"}:
@@ -189,6 +213,15 @@ class SceneBrief:
     layout_variant: str
     camera_style: str
     animation_intensity: str
+    intuition_mode: str = ""
+    mental_model: str = ""
+    viewer_takeaway: str = ""
+    before_state: str = ""
+    after_state: str = ""
+    cause: str = ""
+    effect: str = ""
+    visual_metaphor: str = ""
+    story_window: str = ""
     scene_contract: list[str] = field(default_factory=list)
     text_budget_words: int = 20
     minimum_dynamic_devices: int = 2
@@ -222,6 +255,9 @@ def build_scene_brief(
         else PREFERRED_FEATURES
     )
     preferred_features = list(feature_source.get(scene_family, feature_source["metric_story"]))
+    semantic_frame = dict(spec.get("semantic_frame") or {})
+    intuition_mode = str(semantic_frame.get("intuition_mode") or "").strip().lower()
+    visual_metaphor = str(semantic_frame.get("visual_metaphor") or "").strip().lower()
     tags = [
         scene_family,
         visual_type,
@@ -230,12 +266,16 @@ def build_scene_brief(
         camera_style,
         animation_intensity,
     ]
+    if intuition_mode:
+        tags.append(intuition_mode)
+    if visual_metaphor:
+        tags.append(visual_metaphor)
     return SceneBrief(
         visual_id=str(spec.get("visual_id") or spec.get("id") or "visual"),
         scene_family=scene_family,
         objective=_objective(spec, scene_family),
         spoken_anchor=str(spec.get("sentence_text") or spec.get("headline") or "").strip(),
-        context=str(spec.get("context_text") or spec.get("deck") or "").strip(),
+        context=str(semantic_frame.get("story_window") or spec.get("context_text") or spec.get("deck") or "").strip(),
         headline=str(spec.get("headline") or spec.get("emphasis_text") or "").strip(),
         deck=str(spec.get("deck") or spec.get("footer_text") or "").strip(),
         duration_sec=round(float(spec.get("duration") or max(float(spec.get("end") or 0.0) - float(spec.get("start") or 0.0), 1.0)), 2),
@@ -249,6 +289,15 @@ def build_scene_brief(
         layout_variant=str(spec.get("layout_variant") or "hero_split"),
         camera_style=camera_style,
         animation_intensity=animation_intensity,
+        intuition_mode=intuition_mode,
+        mental_model=str(semantic_frame.get("mental_model") or "").strip(),
+        viewer_takeaway=str(semantic_frame.get("viewer_takeaway") or "").strip(),
+        before_state=str(semantic_frame.get("before_state") or "").strip(),
+        after_state=str(semantic_frame.get("after_state") or "").strip(),
+        cause=str(semantic_frame.get("cause") or "").strip(),
+        effect=str(semantic_frame.get("effect") or "").strip(),
+        visual_metaphor=str(semantic_frame.get("visual_metaphor") or "").strip(),
+        story_window=str(semantic_frame.get("story_window") or spec.get("context_text") or "").strip(),
         scene_contract=_scene_contract(
             spec,
             scene_family=scene_family,
