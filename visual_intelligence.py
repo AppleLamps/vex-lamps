@@ -895,6 +895,32 @@ def _coerce_string_list(raw: Any, limit: int, max_chars: int) -> list[str]:
     return values[:limit]
 
 
+def _promote_composition_for_premium(
+    card: dict[str, Any],
+    composition_mode: str,
+    *,
+    prefer_premium: bool,
+) -> str:
+    if not prefer_premium or composition_mode != "picture_in_picture":
+        return composition_mode
+    replace_safety = float(card.get("replace_safety") or 0.0)
+    visualizability = float(card.get("visualizability") or 0.0)
+    numeric_hits = int(card.get("numeric_hits") or 0)
+    process_cues = float(card.get("process_cues") or 0.0)
+    contrast_cues = float(card.get("contrast_cues") or 0.0)
+    generic_penalty = float(card.get("generic_penalty") or 0.0)
+    explicit_signal = numeric_hits > 0 or process_cues >= 0.34 or contrast_cues >= 0.28
+    if replace_safety >= 0.72 and visualizability >= 0.46 and generic_penalty <= 0.56:
+        return "replace"
+    if replace_safety >= 0.56 and visualizability >= 0.5:
+        return "replace"
+    if replace_safety >= 0.48 and explicit_signal and visualizability >= 0.42:
+        return "replace"
+    if replace_safety >= 0.44 and numeric_hits >= 1 and visualizability >= 0.66:
+        return "replace"
+    return composition_mode
+
+
 def _normalize_visual_plan(
     raw_plan: list[dict[str, Any]],
     cards: list[dict[str, Any]],
@@ -904,7 +930,9 @@ def _normalize_visual_plan(
     max_visual_sec: float,
     scene_cuts: list[float],
     available_renderers: list[dict[str, Any]] | None,
+    prefer_premium: bool = False,
 ) -> list[dict[str, Any]]:
+    epsilon = 1e-3
     card_map = {card["card_id"]: card for card in cards}
     known_renderers = {str(item.get("name") or "").strip().lower() for item in (available_renderers or [])}
     available_names = {
@@ -915,7 +943,11 @@ def _normalize_visual_plan(
     normalized: list[dict[str, Any]] = []
     template_counts: dict[str, int] = {}
     last_end = -999.0
-    for index, item in enumerate(raw_plan, start=1):
+    ordered_plan = sorted(
+        list(raw_plan),
+        key=lambda item: float((card_map.get(str(item.get("card_id") or "").strip()) or {}).get("start") or 0.0),
+    )
+    for index, item in enumerate(ordered_plan, start=1):
         card = card_map.get(str(item.get("card_id") or "").strip())
         if card is None:
             continue
@@ -947,6 +979,11 @@ def _normalize_visual_plan(
             composition_mode = "picture_in_picture"
         if composition_mode not in {"replace", "picture_in_picture"}:
             composition_mode = card["suggested_composition"]
+        composition_mode = _promote_composition_for_premium(
+            card,
+            composition_mode,
+            prefer_premium=prefer_premium,
+        )
         minimum_duration = min_visual_sec
         if composition_mode == "replace":
             minimum_duration = max(minimum_duration, MIN_PREMIUM_REPLACE_DURATION_SEC)
@@ -957,9 +994,9 @@ def _normalize_visual_plan(
             target_duration_sec=min(minimum_duration, max_visual_sec),
             scene_cuts=scene_cuts,
         )
-        if end_sec - start_sec < minimum_duration:
+        if end_sec - start_sec + epsilon < minimum_duration:
             continue
-        if composition_mode == "picture_in_picture":
+        if composition_mode == "picture_in_picture" and not prefer_premium:
             template = EDITORIAL_TEMPLATE_DOWNGRADES.get(template, template)
         template = _upgrade_to_premium_template(card, template, composition_mode)
         position = str(item.get("position") or "bottom_right").strip().lower()
@@ -992,8 +1029,10 @@ def _normalize_visual_plan(
         renderer_hint = str(item.get("renderer_hint") or card["suggested_renderer"] or "auto").strip().lower()
         if composition_mode == "replace" and renderer_hint in {"auto", "ffmpeg"} and template not in {"quote_focus", "keyword_stack", "metric_callout", "stat_grid", "timeline_steps", "comparison_split"}:
             renderer_hint = "manim"
-        if composition_mode == "picture_in_picture" and template in {"metric_callout", "keyword_stack", "quote_focus", "stat_grid", "comparison_split", "timeline_steps"}:
+        if not prefer_premium and composition_mode == "picture_in_picture" and template in {"metric_callout", "keyword_stack", "quote_focus", "stat_grid", "comparison_split", "timeline_steps"}:
             renderer_hint = "ffmpeg"
+        if prefer_premium and renderer_hint in {"auto", "ffmpeg"}:
+            renderer_hint = "manim"
         if renderer_hint in known_renderers and renderer_hint not in available_names:
             renderer_hint = "auto"
         if renderer_hint not in known_renderers and renderer_hint != "auto":
@@ -1044,6 +1083,8 @@ def _normalize_visual_plan(
             "motion_preset": motion_preset,
             "background_motif": background_motif,
             "layout_variant": layout_variant,
+            "generation_tier": "premium" if prefer_premium else "standard",
+            "require_generated_scene": bool(prefer_premium and renderer_hint == "manim"),
             "rationale": truncate(str(item.get("rationale") or "Generated visual aligned to the active spoken beat."), 160),
             "confidence": round(confidence, 2),
             "importance": round(min(max(card["priority"] / 92.0, 0.25), 1.0), 2),
@@ -1166,18 +1207,26 @@ def fallback_visual_plan(
     max_visual_sec: float,
     scene_cuts: list[float],
     available_renderers: list[dict[str, Any]] | None = None,
+    *,
+    prefer_premium: bool = False,
 ) -> list[dict[str, Any]]:
     ranked = _candidate_pool(cards, max_visuals)
     fallback = []
+    candidate_budget = max(max_visuals * 3, max_visuals + 2)
     for card in ranked:
         template = _default_template(card)
+        composition_mode = _promote_composition_for_premium(
+            card,
+            str(card.get("suggested_composition") or "picture_in_picture"),
+            prefer_premium=prefer_premium,
+        )
         fallback.append(
             {
                 "card_id": card["card_id"],
                 "template": template,
-                "renderer_hint": card["suggested_renderer"],
+                "renderer_hint": "manim" if prefer_premium else card["suggested_renderer"],
                 "style_pack": card["style_pack"],
-                "composition_mode": card["suggested_composition"],
+                "composition_mode": composition_mode,
                 "eyebrow": _eyebrow_for_card(card, template),
                 "headline": _headline_from_card(card),
                 "deck": _deck_for_card(card, _headline_from_card(card)),
@@ -1196,11 +1245,15 @@ def fallback_visual_plan(
                 "motion_preset": _default_motion_preset(card, template),
                 "background_motif": _background_motif(card, template, str(card.get("style_pack") or "editorial_clean")),
                 "layout_variant": LAYOUT_VARIANTS.get(template, "hero_split"),
-                "rationale": "Fallback visual chosen from the strongest transcript beat when the model plan was unavailable.",
+                "rationale": (
+                    "Premium deterministic visual chosen from the strongest transcript beat when the model plan was unavailable."
+                    if prefer_premium
+                    else "Fallback visual chosen from the strongest transcript beat when the model plan was unavailable."
+                ),
                 "confidence": round(min(max(card["priority"] / 88.0, 0.45), 0.9), 2),
             }
         )
-        if len(fallback) >= max_visuals:
+        if len(fallback) >= candidate_budget:
             break
     return _resequence_visual_ids(
         _normalize_visual_plan(
@@ -1212,6 +1265,7 @@ def fallback_visual_plan(
             max_visual_sec,
             scene_cuts,
             available_renderers,
+            prefer_premium=prefer_premium,
         )
     )
 
@@ -1258,6 +1312,7 @@ def analyze_visual_plan_with_llm(
     available_renderers: list[dict[str, Any]] | None = None,
     avoid_card_ids: set[str] | None = None,
     disable_fast_plan: bool = False,
+    prefer_premium: bool = False,
 ) -> list[dict[str, Any]]:
     avoid_card_ids = {str(card_id).strip() for card_id in (avoid_card_ids or set()) if str(card_id).strip()}
     fallback = fallback_visual_plan(
@@ -1268,12 +1323,13 @@ def analyze_visual_plan_with_llm(
         max_visual_sec,
         scene_cuts,
         available_renderers,
+        prefer_premium=prefer_premium,
     )
     if not cards:
         return fallback
 
     candidate_cards = _candidate_pool(cards, max_visuals)
-    if not disable_fast_plan and _should_use_fast_plan(candidate_cards, max_visuals):
+    if not disable_fast_plan and not prefer_premium and _should_use_fast_plan(candidate_cards, max_visuals):
         return fallback
     template_lines = "\n".join(f"- {name}: {description}" for name, description in SUPPORTED_TEMPLATES.items())
     renderer_lines = _format_renderer_capabilities(available_renderers)
@@ -1331,6 +1387,7 @@ def analyze_visual_plan_with_llm(
         max_visual_sec,
         scene_cuts,
         available_renderers,
+        prefer_premium=prefer_premium,
     )
     if not normalized_director:
         return fallback
@@ -1368,6 +1425,7 @@ def analyze_visual_plan_with_llm(
             max_visual_sec,
             scene_cuts,
             available_renderers,
+            prefer_premium=prefer_premium,
         )
         if normalized_critic:
             normalized_critic = _backfill_plan_with_fallback(normalized_critic, fallback, max_visuals=max_visuals)

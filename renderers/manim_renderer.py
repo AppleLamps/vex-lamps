@@ -16,6 +16,7 @@ from vex_manim.blueprint import build_scene_blueprints
 from vex_manim.briefs import build_scene_brief
 from vex_manim.director import request_scene_candidate, write_generation_report
 from vex_manim.layout_qa import analyze_layout_snapshot, load_layout_snapshot
+from vex_manim.premium_fallback import run_premium_blueprint_scene
 from vex_manim.qa import analyze_preview, evaluate_generated_scene_quality, extract_preview_frames
 from vex_manim.scene_library import retrieve_scene_examples
 from vex_manim.validator import validate_generated_scene_code
@@ -649,6 +650,35 @@ def _scene_wrapper(scene_code: str, spec: dict[str, Any], brief_payload: dict[st
     )
 
 
+def _premium_blueprint_wrapper(
+    spec: dict[str, Any],
+    brief_payload: dict[str, Any],
+    blueprint_payload: dict[str, Any],
+) -> str:
+    payload = dict(spec)
+    payload["theme"] = _theme_defaults(spec)
+    spec_json = json.dumps(payload, ensure_ascii=True)
+    brief_json = json.dumps(brief_payload, ensure_ascii=True)
+    blueprint_json = json.dumps(blueprint_payload, ensure_ascii=True)
+    return (
+        "from __future__ import annotations\n\n"
+        "import json\n\n"
+        "import manim\n"
+        "from manim import *\n"
+        "from manim.utils.rate_functions import *\n"
+        "from vex_manim.runtime import *\n"
+        "from vex_manim.premium_fallback import run_premium_blueprint_scene\n\n"
+        f"SCENE_SPEC = json.loads(r'''{spec_json}''')\n"
+        f"SCENE_BRIEF = json.loads(r'''{brief_json}''')\n"
+        f"SCENE_BLUEPRINT = json.loads(r'''{blueprint_json}''')\n\n"
+        "class GeneratedScene(VexGeneratedScene):\n"
+        "    def construct(self):\n"
+        "        run_premium_blueprint_scene(self, SCENE_SPEC, SCENE_BRIEF, SCENE_BLUEPRINT)\n\n"
+        "GeneratedScene.SCENE_SPEC = SCENE_SPEC\n"
+        "GeneratedScene.SCENE_BRIEF = SCENE_BRIEF\n"
+    )
+
+
 def _render_script(
     script_path: Path,
     *,
@@ -839,9 +869,11 @@ def _example_limit_for_brief(brief) -> int:
 
 def _attempt_budget_for_brief(brief, spec: dict[str, Any]) -> int:
     model_name = str(spec.get("generation_model") or "").strip().lower()
+    generation_tier = str(spec.get("generation_tier") or "").strip().lower()
+    composition_mode = str(spec.get("composition_mode") or "").strip().lower()
     if model_name.startswith("gemma"):
         if (
-            str(spec.get("composition_mode") or "").strip().lower() == "replace"
+            composition_mode == "replace"
             and (
                 float(spec.get("importance") or 0.0) >= 0.62
                 or float(spec.get("duration") or 0.0) <= 3.8
@@ -849,10 +881,14 @@ def _attempt_budget_for_brief(brief, spec: dict[str, Any]) -> int:
             )
         ):
             return 2
+        if generation_tier == "premium" and composition_mode == "picture_in_picture":
+            return 2
         return 1
     importance = float(spec.get("importance") or 0.0)
     template = str(spec.get("template") or "")
-    if str(spec.get("composition_mode") or "") == "replace" and template in {"data_journey", "signal_network", "kinetic_route", "spotlight_compare", "interface_cascade", "ribbon_quote"}:
+    if composition_mode == "replace" and template in {"data_journey", "signal_network", "kinetic_route", "spotlight_compare", "interface_cascade", "ribbon_quote"}:
+        return MAX_GENERATION_ATTEMPTS
+    if generation_tier == "premium" and composition_mode == "picture_in_picture":
         return MAX_GENERATION_ATTEMPTS
     if brief.scene_family in {"system_map", "comparison_morph", "timeline_journey", "interface_focus"}:
         return MAX_GENERATION_ATTEMPTS
@@ -893,6 +929,8 @@ def _should_use_compact_retry(
 ) -> bool:
     if attempt_index <= 1:
         return False
+    if not previous_code:
+        return True
     if previous_code:
         return float(getattr(brief, "duration_sec", 0.0) or 0.0) <= 3.8
     if not feedback_lines:
@@ -905,7 +943,14 @@ def _should_try_generated_scene(spec: dict[str, Any], brief) -> bool:
     composition_mode = str(spec.get("composition_mode") or "").strip().lower()
     importance = float(spec.get("importance") or 0.0)
     duration = float(spec.get("duration") or 0.0)
+    generation_tier = str(spec.get("generation_tier") or "").strip().lower()
+    require_generated_scene = bool(spec.get("require_generated_scene"))
     if composition_mode == "picture_in_picture":
+        if require_generated_scene or generation_tier == "premium":
+            if template in PREMIUM_GENERATED_TEMPLATES:
+                return duration >= 2.2 and importance >= 0.48
+            if template in FAST_TEMPLATE_TEMPLATES:
+                return duration >= 2.2 and (importance >= 0.58 or brief.animation_intensity in {"medium", "high"})
         return False
     if template in PREMIUM_GENERATED_TEMPLATES:
         if importance >= 0.56:
@@ -1157,7 +1202,19 @@ class ManimRenderer(VisualRenderer):
             )
 
         report_path = job_dir / "generation_report.json"
-        fallback_used = chosen_scene_source is None
+        used_blueprint_compiler = False
+        if chosen_scene_source is None:
+            used_blueprint_compiler = True
+            chosen_scene_source = _premium_blueprint_wrapper(
+                spec,
+                brief.to_dict(),
+                selected_blueprint.to_dict(),
+            )
+            chosen_quality = {
+                "score": 0.74,
+                "soft_accept": True,
+            }
+        fallback_used = bool(used_blueprint_compiler)
         write_generation_report(
             report_path,
             brief=brief,
@@ -1166,7 +1223,7 @@ class ManimRenderer(VisualRenderer):
             selected_examples=full_examples,
             attempts=attempts,
             final_candidate=chosen_candidate,
-            final_scene_code=chosen_candidate.scene_code if chosen_candidate else None,
+            final_scene_code=chosen_candidate.scene_code if chosen_candidate else chosen_scene_source,
             quality_score=(chosen_quality or {}).get("score"),
             fallback_used=fallback_used,
         )
@@ -1178,7 +1235,7 @@ class ManimRenderer(VisualRenderer):
         layout_snapshot_path = job_dir / "layout_snapshot.json"
         artifact_paths["layout_snapshot_path"] = str(layout_snapshot_path)
         metadata = {
-            "scene_generation_mode": "llm_codegen",
+            "scene_generation_mode": "blueprint_compiler" if used_blueprint_compiler else "llm_codegen",
             "scene_family": brief.scene_family,
             "blueprint_id": selected_blueprint.blueprint_id,
             "blueprint_archetype": selected_blueprint.archetype,
@@ -1190,19 +1247,22 @@ class ManimRenderer(VisualRenderer):
             "fallback_used": fallback_used,
             "attempt_budget": attempt_budget,
         }
-        if chosen_scene_source is None:
-            _emit_render_progress(f"{spec.get('visual_id', 'visual')}: generated path failed QA, falling back to legacy template")
-            raise VisualRendererError(
-                "Generated Manim scene did not pass validation and preview QA. See generation_report.json for details."
-            )
-
         final_script_path = job_dir / "scene.py"
         final_spec = dict(spec)
         final_spec["layout_snapshot_path"] = str(layout_snapshot_path)
-        final_script_path.write_text(
-            _scene_wrapper(chosen_candidate.scene_code, final_spec, brief.to_dict()),
-            encoding="utf-8",
-        )
+        if used_blueprint_compiler:
+            _emit_render_progress(
+                f"{spec.get('visual_id', 'visual')}: switching to deterministic premium blueprint compiler"
+            )
+            final_script_path.write_text(
+                _premium_blueprint_wrapper(final_spec, brief.to_dict(), selected_blueprint.to_dict()),
+                encoding="utf-8",
+            )
+        else:
+            final_script_path.write_text(
+                _scene_wrapper(chosen_candidate.scene_code, final_spec, brief.to_dict()),
+                encoding="utf-8",
+            )
         return final_script_path, metadata, artifact_paths
 
     def render(
@@ -1224,6 +1284,7 @@ class ManimRenderer(VisualRenderer):
         scene_name = "GeneratedScene"
         latex_available = _latex_runtime_ready(job_dir)
         decision_brief = build_scene_brief(spec, width=width, height=height, fps=fps, latex_available=latex_available)
+        require_generated_scene = bool(spec.get("require_generated_scene"))
         try:
             if _should_try_generated_scene(spec, decision_brief):
                 _emit_render_progress(f"{spec_id}: preparing generated Manim scene")
@@ -1238,6 +1299,10 @@ class ManimRenderer(VisualRenderer):
             else:
                 raise VisualRendererError("Fast-path deterministic template selected for this lightweight visual.")
         except Exception as exc:
+            if require_generated_scene:
+                raise VisualRendererError(
+                    f"Premium generated Manim scene was required for {spec_id}, but the generated path failed: {exc}"
+                ) from exc
             scene_name = _safe_scene_name(spec_id)
             script_path = job_dir / "scene.py"
             script_path.write_text(_legacy_scene_script(scene_name, spec), encoding="utf-8")

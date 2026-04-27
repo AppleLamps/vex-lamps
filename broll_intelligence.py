@@ -4,12 +4,15 @@ import json
 import math
 import re
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import httpx
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
 import config
@@ -101,6 +104,60 @@ def extract_json_object(raw_text: str) -> str:
     return cleaned[start : end + 1]
 
 
+def _status_code_for_reasoning_error(exc: Exception) -> int | None:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+    response = getattr(exc, "response", None)
+    response_status = getattr(response, "status_code", None)
+    if isinstance(response_status, int):
+        return response_status
+    return None
+
+
+def _is_retryable_reasoning_error(exc: Exception) -> bool:
+    if isinstance(exc, (genai_errors.ServerError, httpx.HTTPError, TimeoutError, OSError)):
+        return True
+    if isinstance(exc, (genai_errors.ClientError, genai_errors.APIError)):
+        status_code = _status_code_for_reasoning_error(exc)
+        if status_code in {408, 409, 425, 429}:
+            return True
+        if status_code is not None and status_code >= 500:
+            return True
+    message = str(exc).lower()
+    retry_hints = (
+        "internal error",
+        "temporar",
+        "timeout",
+        "timed out",
+        "connection reset",
+        "service unavailable",
+        "overloaded",
+        "rate limit",
+        "retry",
+    )
+    return any(hint in message for hint in retry_hints)
+
+
+def _call_with_reasoning_retry(operation):
+    max_attempts = max(1, int(config.LLM_REQUEST_MAX_RETRIES))
+    last_exc: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            retryable = _is_retryable_reasoning_error(exc)
+            if retryable and attempt < max_attempts:
+                delay = float(config.LLM_RETRY_BASE_DELAY_SEC) * (2 ** (attempt - 1))
+                time.sleep(delay)
+                continue
+            raise
+    if last_exc is not None:
+        raise last_exc
+    raise RuntimeError("Reasoning model call failed without raising an exception.")
+
+
 def call_reasoning_model(provider_name: str, model_name: str, system_prompt: str, user_prompt: str) -> str:
     config.configure_runtime_logging()
     if provider_name == "claude":
@@ -110,11 +167,13 @@ def call_reasoning_model(provider_name: str, model_name: str, system_prompt: str
             api_key=config.ANTHROPIC_API_KEY,
             timeout=config.ANTHROPIC_TIMEOUT_SEC,
         )
-        response = client.messages.create(
-            model=model_name or config.CLAUDE_MODEL,
-            max_tokens=4096,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
+        response = _call_with_reasoning_retry(
+            lambda: client.messages.create(
+                model=model_name or config.CLAUDE_MODEL,
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
         )
         return "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
 
@@ -122,13 +181,15 @@ def call_reasoning_model(provider_name: str, model_name: str, system_prompt: str
         api_key=config.GEMINI_API_KEY,
         http_options=config.google_genai_http_options(),
     )
-    response = client.models.generate_content(
-        model=model_name or config.GEMINI_MODEL,
-        contents=user_prompt,
-        config=config.build_gemini_generation_config(
-            system_prompt,
-            model_name=model_name or config.GEMINI_MODEL,
-        ),
+    response = _call_with_reasoning_retry(
+        lambda: client.models.generate_content(
+            model=model_name or config.GEMINI_MODEL,
+            contents=user_prompt,
+            config=config.build_gemini_generation_config(
+                system_prompt,
+                model_name=model_name or config.GEMINI_MODEL,
+            ),
+        )
     )
     return getattr(response, "text", "") or ""
 

@@ -632,7 +632,9 @@ class VexGeneratedScene(MovingCameraScene):
     def make_metric_badge(
         self,
         text: str,
+        subtext: str | None = None,
         *,
+        label: str | None = None,
         width: float = 2.1,
         fill: str | None = None,
         text_color: str | None = None,
@@ -640,19 +642,59 @@ class VexGeneratedScene(MovingCameraScene):
         **kwargs: Any,
     ) -> VGroup:
         resolved_fill = fill or color or self.theme_color("accent")
-        shell = self.make_pill(
-            text,
-            fill=resolved_fill,
-            text_color=text_color or self.theme_color("background"),
-            width=width,
-            **kwargs,
+        resolved_text_color = text_color or self.theme_color("background")
+        value_text = str(text or "").strip()
+        unit_text = str(subtext or "").strip()
+        label_text = str(label or "").strip()
+        if not unit_text and not label_text:
+            shell = self.make_pill(
+                value_text,
+                fill=resolved_fill,
+                text_color=resolved_text_color,
+                width=width,
+                **kwargs,
+            )
+            halo = shell[0].copy().scale(1.18).set_fill(opacity=0).set_stroke(
+                ManimColor(resolved_fill),
+                width=2.0,
+                opacity=0.16,
+            )
+            return VGroup(halo, shell)
+
+        stack = VGroup()
+        if label_text:
+            label_mob = self.fit_text(
+                label_text.upper(),
+                max_width=max(width * 1.6, 2.8),
+                max_font_size=16,
+                min_font_size=10,
+                color=self.theme_color("eyebrow_text"),
+                weight=BOLD,
+            )
+            stack.add(label_mob)
+        value_line = self.fit_text(
+            " ".join(part for part in [value_text, unit_text] if part).strip(),
+            max_width=max(width * 1.9, 2.8),
+            max_font_size=30,
+            min_font_size=16,
+            color=resolved_text_color,
+            weight=BOLD,
         )
-        halo = shell[0].copy().scale(1.18).set_fill(opacity=0).set_stroke(
+        stack.add(value_line)
+        stack.arrange(DOWN, buff=0.14, aligned_edge=LEFT)
+
+        shell_width = max(float(width), stack.width + 0.52)
+        shell_height = max(0.72, stack.height + 0.38)
+        shell = RoundedRectangle(corner_radius=0.2, width=shell_width, height=shell_height)
+        shell.set_fill(ManimColor(resolved_fill), opacity=1.0)
+        shell.set_stroke(width=0)
+        stack.move_to(shell.get_center())
+        halo = shell.copy().scale(1.16).set_fill(opacity=0).set_stroke(
             ManimColor(resolved_fill),
             width=2.0,
             opacity=0.16,
         )
-        return VGroup(halo, shell)
+        return VGroup(halo, shell, stack)
 
     def make_ribbon_label(
         self,

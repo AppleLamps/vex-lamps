@@ -236,7 +236,12 @@ def _render_generated_visual(
 ) -> tuple[object, str]:
     failures: list[str] = []
     attempted: set[str] = set()
-    preference_order = [preferred_renderer, str(spec.get("renderer_hint") or "auto"), "auto"]
+    require_generated_scene = bool(spec.get("require_generated_scene"))
+    if require_generated_scene:
+        locked_preference = str(spec.get("renderer_hint") or preferred_renderer or "manim").strip().lower() or "manim"
+        preference_order = [locked_preference]
+    else:
+        preference_order = [preferred_renderer, str(spec.get("renderer_hint") or "auto"), "auto"]
     for candidate_preference in preference_order:
         while True:
             try:
@@ -245,6 +250,11 @@ def _render_generated_visual(
                 failures.append(str(exc))
                 break
             attempted.add(renderer.name)
+            if require_generated_scene and renderer.name != str(spec.get("renderer_hint") or "manim").strip().lower():
+                failures.append(
+                    f"{renderer.name}: premium generated scenes are locked to {spec.get('renderer_hint') or 'manim'}."
+                )
+                break
             try:
                 asset = renderer.render(spec, render_root=render_root, width=width, height=height, fps=fps)
                 return asset, reason
@@ -302,7 +312,7 @@ def execute(params: dict, state: ProjectState) -> dict:
         transcript_segments = list(transcript_bundle.get("segments") or [])
         transcript_words = list(transcript_bundle.get("words") or [])
         sentence_segments = list(transcript_bundle.get("sentences") or [])
-        blocked_ranges = state.replace_overlay_ranges()
+        blocked_ranges = state.overlay_ranges()
         _emit_progress("Detecting safe scene cuts...")
         scene_cuts = _detect_scene_cuts_cached(state)
         _emit_progress("Building visual candidate cards from the transcript...")
@@ -323,6 +333,7 @@ def execute(params: dict, state: ProjectState) -> dict:
         if not cards:
             raise RuntimeError("No transcript-aligned visual cards were available for planning after respecting existing full-screen overlay windows.")
         provider_name, model_name = _provider_and_model(state)
+        prefer_premium = mode == "generated_only" or renderer_name in {"auto", "manim"}
         capabilities = renderer_capabilities()
         bundle_root = ensure_writable_dir(
             writable_dir_candidates(state.working_dir, state.output_dir, state.project_id, "auto_visual_bundles")
@@ -339,7 +350,8 @@ def execute(params: dict, state: ProjectState) -> dict:
             scene_cuts=scene_cuts,
             available_renderers=capabilities,
             avoid_card_ids=prior_card_ids,
-            disable_fast_plan=bool(prior_card_ids),
+            disable_fast_plan=bool(prior_card_ids) or prefer_premium,
+            prefer_premium=prefer_premium,
         )
         plan = restrict_timed_items_to_available_ranges(
             plan,

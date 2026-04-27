@@ -121,6 +121,15 @@ UNSUPPORTED_ANIMATION_KWARGS = {
 
 POINT_LITERAL_NAMES = {"UP", "DOWN", "LEFT", "RIGHT", "ORIGIN", "UL", "UR", "DL", "DR"}
 POINT_FUNCTION_NAMES = {"interpolate", "midpoint"}
+POINT_ACCESSOR_SUFFIXES = {
+    ".get_center",
+    ".get_left",
+    ".get_right",
+    ".get_top",
+    ".get_bottom",
+    ".get_corner",
+    ".point_at_angle",
+}
 
 
 def _call_name(node: ast.AST) -> str:
@@ -163,6 +172,7 @@ def _is_point_expression(node: ast.AST) -> bool:
             call_name.split(".")[-1] in POINT_FUNCTION_NAMES
             or call_name.endswith(".c2p")
             or call_name.endswith(".point_from_proportion")
+            or any(call_name.endswith(suffix) for suffix in POINT_ACCESSOR_SUFFIXES)
         )
     return False
 
@@ -309,6 +319,36 @@ def _repair_scene_code(scene_code: str) -> str:
 
     class HelperQualifier(ast.NodeTransformer):
         @staticmethod
+        def _center_point(node: ast.AST) -> ast.Call:
+            return ast.Call(
+                func=ast.Attribute(value=node, attr="get_center", ctx=ast.Load()),
+                args=[],
+                keywords=[],
+            )
+
+        def _coerce_point_like(self, node: ast.AST) -> ast.AST:
+            if _is_point_expression(node) or _is_numeric_expr(node):
+                return node
+            if isinstance(node, ast.BinOp):
+                if isinstance(node.op, (ast.Add, ast.Sub)):
+                    return ast.BinOp(
+                        left=self._coerce_point_like(node.left),
+                        op=node.op,
+                        right=self._coerce_point_like(node.right),
+                    )
+                if isinstance(node.op, (ast.Mult, ast.Div)):
+                    return ast.BinOp(
+                        left=self._coerce_point_like(node.left),
+                        op=node.op,
+                        right=self._coerce_point_like(node.right),
+                    )
+            if isinstance(node, ast.UnaryOp):
+                return ast.UnaryOp(op=node.op, operand=self._coerce_point_like(node.operand))
+            if isinstance(node, (ast.Name, ast.Attribute, ast.Subscript, ast.Call)):
+                return self._center_point(node)
+            return node
+
+        @staticmethod
         def _rate_function_attribute(name: str) -> ast.Attribute:
             canonical = RATE_FUNCTION_ALIASES.get(name, name)
             return ast.Attribute(
@@ -319,6 +359,9 @@ def _repair_scene_code(scene_code: str) -> str:
 
         def visit_Call(self, node: ast.Call) -> ast.AST:
             self.generic_visit(node)
+            short_name = _call_name(node.func).split(".")[-1]
+            if short_name == "move_to" and node.args and isinstance(node.args[0], (ast.BinOp, ast.UnaryOp)):
+                node.args[0] = self._coerce_point_like(node.args[0])
             if isinstance(node.func, ast.Attribute) and len(node.args) == 1:
                 base = node.func.value
                 if node.func.attr == "shift" and _is_point_expression(base):

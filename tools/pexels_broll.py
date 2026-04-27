@@ -21,7 +21,7 @@ from broll_intelligence import (
     writable_dir_candidates,
 )
 from engine import VideoEngineError, apply_b_roll_overlays, probe_video
-from state import ProjectState, restrict_timed_items_to_available_ranges, utc_now_iso
+from state import ProjectState, merge_time_ranges, restrict_timed_items_to_available_ranges, utc_now_iso
 from tools.transcript import execute as transcribe
 from tools.transcript_utils import parse_srt
 from tools.undo import refresh_generated_overlay_ops
@@ -68,7 +68,11 @@ def execute(params: dict, state: ProjectState) -> dict:
         metadata = state.metadata or probe_video(state.working_file)
         clip_duration = float(metadata.get("duration_sec") or 0.0)
         target_orientation = video_orientation(int(metadata.get("width") or 0), int(metadata.get("height") or 0))
-        blocked_ranges = state.replace_overlay_ranges()
+        blocked_ranges = merge_time_ranges(
+            state.replace_overlay_ranges()
+            + state.overlay_ranges(include_ops={"add_auto_visuals"}, include_picture_in_picture=True),
+            gap_sec=0.08,
+        )
         provider_name = (state.provider or config.PROVIDER or "gemini").strip().lower()
         if provider_name not in {"gemini", "claude"}:
             provider_name = "gemini"

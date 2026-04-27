@@ -316,11 +316,26 @@ class ProjectState:
         *,
         exclude_ops: set[str] | None = None,
     ) -> list[tuple[float, float]]:
+        return self.overlay_ranges(
+            exclude_ops=exclude_ops,
+            include_picture_in_picture=False,
+        )
+
+    def overlay_ranges(
+        self,
+        *,
+        exclude_ops: set[str] | None = None,
+        include_ops: set[str] | None = None,
+        include_picture_in_picture: bool = True,
+    ) -> list[tuple[float, float]]:
         blocked_ranges: list[tuple[float, float]] = []
         excluded = exclude_ops or set()
+        included = include_ops or set()
         for op in self.timeline:
             op_name = str(op.get("op") or "").strip()
             if op_name in excluded:
+                continue
+            if included and op_name not in included:
                 continue
             overlays = (op.get("params") or {}).get("overlays") or []
             if not isinstance(overlays, list):
@@ -331,7 +346,10 @@ class ProjectState:
                 compose_mode = str(
                     overlay.get("compose_mode") or overlay.get("composition_mode") or "replace"
                 ).strip().lower()
-                if compose_mode in {"pip", "overlay", "picture_in_picture", "picture-in-picture"}:
+                if (
+                    not include_picture_in_picture
+                    and compose_mode in {"pip", "overlay", "picture_in_picture", "picture-in-picture"}
+                ):
                     continue
                 try:
                     start_sec = float(overlay.get("start", 0.0))
