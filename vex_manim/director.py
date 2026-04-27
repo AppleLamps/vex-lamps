@@ -321,7 +321,10 @@ def request_scene_candidate(
     previous_code: str | None = None,
     feedback_lines: list[str] | None = None,
 ) -> SceneCandidate:
-    skills = retrieve_skill_slices(brief, limit=4)
+    skill_limit = 2 if brief.animation_intensity == "low" else 3
+    if brief.scene_family in {"kinetic_quote", "kinetic_stack", "dashboard_build"}:
+        skill_limit = min(skill_limit, 2)
+    skills = retrieve_skill_slices(brief, limit=skill_limit)
     raw_text = call_reasoning_model(
         provider_name,
         model_name,

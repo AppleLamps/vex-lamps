@@ -606,12 +606,20 @@ def run_agent_with_live_trace(agent: VideoAgent, command: str):
             active_tool_name = None
         refresh_status()
 
+    progress = Progress(
+        SpinnerColumn(style="cyan"),
+        TextColumn("{task.fields[status]}", justify="left"),
+        console=console,
+        transient=True,
+    )
     response = None
-    with console.status(status_text["value"], spinner="dots") as status:
+    with progress:
+        task_id = progress.add_task("", total=None, status=status_text["value"])
+
         def heartbeat() -> None:
             while not stop_event.is_set():
                 refresh_status()
-                status.update(status_text["value"])
+                progress.update(task_id, status=status_text["value"])
                 stop_event.wait(0.75)
 
         heartbeat_thread = threading.Thread(target=heartbeat, name="vex-live-status", daemon=True)
@@ -629,7 +637,7 @@ def run_agent_with_live_trace(agent: VideoAgent, command: str):
             stop_event.set()
             heartbeat_thread.join(timeout=1.5)
             refresh_status()
-            status.update(status_text["value"])
+            progress.update(task_id, status=status_text["value"])
     if response is None:
         raise AgentLoopError("The agent run did not return a response.")
     return response, trace_events

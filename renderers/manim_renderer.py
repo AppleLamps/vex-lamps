@@ -22,6 +22,23 @@ from vex_manim.validator import validate_generated_scene_code
 
 MAX_GENERATION_ATTEMPTS = 2
 _LATEX_RUNTIME_READY_CACHE: bool | None = None
+PREMIUM_GENERATED_TEMPLATES = {
+    "data_journey",
+    "signal_network",
+    "kinetic_route",
+    "spotlight_compare",
+    "interface_cascade",
+    "ribbon_quote",
+}
+FAST_TEMPLATE_TEMPLATES = {
+    "metric_callout",
+    "keyword_stack",
+    "timeline_steps",
+    "comparison_split",
+    "quote_focus",
+    "system_flow",
+    "stat_grid",
+}
 LEGACY_TEMPLATE_ALIASES = {
     "data_journey": "metric_callout",
     "signal_network": "system_flow",
@@ -714,6 +731,10 @@ def _history_roots(spec: dict[str, Any]) -> list[Path]:
 
 
 def _example_limit_for_brief(brief) -> int:
+    if brief.animation_intensity == "low":
+        return 1
+    if brief.scene_family in {"kinetic_quote", "kinetic_stack", "dashboard_build"}:
+        return 1
     if brief.scene_family in {"system_map", "comparison_morph", "timeline_journey", "interface_focus"}:
         return 3
     return 2 if brief.animation_intensity == "low" else 3
@@ -750,6 +771,22 @@ def _preview_render_budget(brief, fps: float, *, compact: bool) -> tuple[float, 
     if brief.scene_family in {"kinetic_quote", "kinetic_stack"}:
         return min(fps, 14.0), 1
     return min(fps, 16.0), 2
+
+
+def _should_try_generated_scene(spec: dict[str, Any], brief) -> bool:
+    template = str(spec.get("template") or "").strip().lower()
+    composition_mode = str(spec.get("composition_mode") or "").strip().lower()
+    importance = float(spec.get("importance") or 0.0)
+    duration = float(spec.get("duration") or 0.0)
+    if composition_mode == "picture_in_picture":
+        return False
+    if template in PREMIUM_GENERATED_TEMPLATES:
+        if importance >= 0.56:
+            return True
+        return duration >= 2.6 and brief.animation_intensity in {"medium", "high"}
+    if template in FAST_TEMPLATE_TEMPLATES:
+        return importance >= 0.9 and brief.animation_intensity == "high" and duration >= 3.2
+    return importance >= 0.86 and composition_mode == "replace" and brief.animation_intensity != "low"
 
 
 class ManimRenderer(VisualRenderer):
@@ -1010,16 +1047,20 @@ class ManimRenderer(VisualRenderer):
         scene_metadata: dict[str, Any] = {}
         scene_name = "GeneratedScene"
         latex_available = _latex_runtime_ready(job_dir)
+        decision_brief = build_scene_brief(spec, width=width, height=height, fps=fps, latex_available=latex_available)
         try:
-            _emit_render_progress(f"{spec_id}: preparing generated Manim scene")
-            script_path, scene_metadata, artifact_paths = self._attempt_generated_scene(
-                spec,
-                job_dir=job_dir,
-                width=width,
-                height=height,
-                fps=fps,
-                latex_available=latex_available,
-            )
+            if _should_try_generated_scene(spec, decision_brief):
+                _emit_render_progress(f"{spec_id}: preparing generated Manim scene")
+                script_path, scene_metadata, artifact_paths = self._attempt_generated_scene(
+                    spec,
+                    job_dir=job_dir,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    latex_available=latex_available,
+                )
+            else:
+                raise VisualRendererError("Fast-path deterministic template selected for this lightweight visual.")
         except Exception as exc:
             scene_name = _safe_scene_name(spec_id)
             script_path = job_dir / "scene.py"
@@ -1029,7 +1070,11 @@ class ManimRenderer(VisualRenderer):
                 "template": str(spec.get("template") or ""),
                 "generation_failure": str(exc),
             }
-            _emit_render_progress(f"{spec_id}: using legacy template fallback - {exc}")
+            if str(exc) == "Fast-path deterministic template selected for this lightweight visual.":
+                scene_metadata["generation_skipped"] = "fast_path_lightweight_visual"
+                _emit_render_progress(f"{spec_id}: using fast deterministic Manim template")
+            else:
+                _emit_render_progress(f"{spec_id}: using legacy template fallback - {exc}")
 
         media_dir = job_dir / "media"
         output_stem = scene_name if scene_name != "GeneratedScene" else f"GeneratedScene_{_safe_scene_name(spec_id)}"
