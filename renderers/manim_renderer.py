@@ -816,6 +816,21 @@ def _can_soft_accept_quality(brief, validation, quality) -> bool:
     return all(_is_duration_issue(issue) or _is_static_issue(issue) for issue in issues)
 
 
+def _minimum_blueprint_compiler_quality(brief) -> float:
+    family = str(getattr(brief, "scene_family", "") or "")
+    if family == "timeline_journey":
+        return 0.55
+    if family == "system_map":
+        return 0.58
+    if family in {"metric_story", "dashboard_build"}:
+        return 0.64
+    if family == "comparison_morph":
+        return 0.66
+    if family == "interface_focus":
+        return 0.62
+    return 0.6
+
+
 def _retime_rendered_video(
     input_path: Path,
     output_path: Path,
@@ -1229,6 +1244,7 @@ class ManimRenderer(VisualRenderer):
 
         report_path = job_dir / "generation_report.json"
         used_blueprint_compiler = False
+        blueprint_compiler_rejection: str | None = None
         if chosen_scene_source is None:
             used_blueprint_compiler = True
             compiler_attempt_dir = attempts_root / "blueprint_compiler"
@@ -1283,6 +1299,13 @@ class ManimRenderer(VisualRenderer):
                 compiler_attempt["quality"] = quality.to_dict()
                 compiler_attempt["quality_soft_accept"] = soft_accept
                 chosen_quality = {**quality.to_dict(), "soft_accept": soft_accept}
+                min_compiler_quality = _minimum_blueprint_compiler_quality(brief)
+                if float(quality.score) < min_compiler_quality:
+                    blueprint_compiler_rejection = (
+                        f"Deterministic premium fallback quality {quality.score:.3f} was below the required "
+                        f"{min_compiler_quality:.2f} for {brief.scene_family}."
+                    )
+                    compiler_attempt["rejected"] = blueprint_compiler_rejection
             except Exception as exc:
                 compiler_attempt["preview_error"] = str(exc)
                 chosen_quality = {
@@ -1290,6 +1313,7 @@ class ManimRenderer(VisualRenderer):
                     "issues": [f"Blueprint compiler preview failed: {exc}"],
                     "soft_accept": True,
                 }
+                blueprint_compiler_rejection = f"Deterministic premium fallback preview failed: {exc}"
             attempts.append(compiler_attempt)
         fallback_used = bool(used_blueprint_compiler)
         write_generation_report(
@@ -1305,6 +1329,8 @@ class ManimRenderer(VisualRenderer):
             quality_score=(chosen_quality or {}).get("score"),
             fallback_used=fallback_used,
         )
+        if blueprint_compiler_rejection:
+            raise VisualRendererError(blueprint_compiler_rejection)
         artifact_paths = {
             "generation_report_path": str(report_path),
             "scene_brief_path": str(brief_path),

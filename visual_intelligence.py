@@ -518,7 +518,7 @@ def _derive_semantic_frame(
     numeric_hits: int,
     process_cues: float,
     contrast_cues: float,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     story_window = truncate(" ".join(item for item in [previous_text, sentence_text, next_text] if item).strip(), 320)
     full_context = ". ".join(item for item in [previous_text, sentence_text, next_text, context_text] if item).strip()
     fragments = _split_fragments(full_context, limit=10)
@@ -567,9 +567,27 @@ def _derive_semantic_frame(
     )
     ordinal_or_method = bool(re.search(r"\b(?:method|step|part|chapter|tip)\s+\d+\b", full_context, flags=re.IGNORECASE))
     negative_before = _marker_hits(before_state, NEGATIVE_STATE_MARKERS) > 0
-    positive_after = _marker_hits(after_state, POSITIVE_STATE_MARKERS) > 0
+    negative_in_sentence = bool(
+        _marker_hits(sentence_text, NEGATIVE_STATE_MARKERS) > 0
+        or re.search(r"\bnot\b|don't|doesn't|never\b", sentence_text, flags=re.IGNORECASE)
+    )
+    positive_after = bool(
+        _marker_hits(after_state, POSITIVE_STATE_MARKERS) > 0
+        and not re.search(r"\bnot\b|don't|doesn't|never\b", after_state, flags=re.IGNORECASE)
+    )
+    positive_in_sentence = bool(
+        _marker_hits(sentence_text, POSITIVE_STATE_MARKERS) > 0
+        and not negative_in_sentence
+    )
 
-    if numeric_signal and not ordinal_or_method:
+    explicit_negation = bool(
+        re.search(
+            r"\bnot by\b|that's not learning|that is not learning|that's not\b|doesn't matter|don't learn|not learning\b",
+            full_context,
+            flags=re.IGNORECASE,
+        )
+    )
+    if numeric_signal and not ordinal_or_method and not (explicit_negation and contrast_cues >= 0.12):
         intuition_mode = "metric_proof"
     elif before_state and after_state and before_state.lower() != after_state.lower() and negative_before and positive_after:
         intuition_mode = "misconception_flip" if (contrast_cues >= 0.12 or re.search(r"\bbut\b|\binstead\b|don't|doesn't", full_context, flags=re.IGNORECASE)) else "process_route"
@@ -609,8 +627,55 @@ def _derive_semantic_frame(
         viewer_takeaway = headline_seed or after_state
         visual_metaphor = "kinetic_focus"
 
+    positive_resolution = bool(
+        after_state
+        and after_state.lower() != before_state.lower()
+        and (
+            positive_after
+            or _marker_hits(next_text, POSITIVE_STATE_MARKERS) > 0
+            or re.search(r"\bstart\b|\bbuild\b|\blearn\b|\bship\b|\btarget(?:ed)?\b", after_state, flags=re.IGNORECASE)
+        )
+    )
+    if intuition_mode in {"process_route", "causal_chain"}:
+        intuition_role = "core_mechanism"
+    elif intuition_mode == "misconception_flip":
+        intuition_role = "core_mechanism" if positive_resolution and positive_in_sentence else "supporting_example"
+    elif intuition_mode == "metric_proof":
+        intuition_role = "supporting_example" if (explicit_negation or negative_in_sentence) and not positive_in_sentence else "concrete_proof"
+    elif intuition_mode == "interface_walkthrough":
+        intuition_role = "core_mechanism"
+    else:
+        intuition_role = "supporting_example"
+
+    payoff = {
+        "core_mechanism": 0.88,
+        "concrete_proof": 0.74,
+        "supporting_example": 0.48,
+    }.get(intuition_role, 0.56)
+    if intuition_mode == "process_route":
+        payoff += 0.08
+    elif intuition_mode == "causal_chain":
+        payoff += 0.07
+    elif intuition_mode == "misconception_flip":
+        payoff += 0.04
+    elif intuition_mode == "metric_proof":
+        payoff += 0.02 if numeric_signal else -0.04
+    payoff += min(process_cues, 0.55) * 0.08
+    payoff += min(contrast_cues, 0.55) * 0.06
+    if explicit_negation and intuition_role == "supporting_example":
+        payoff -= 0.14
+    if not positive_resolution and intuition_role != "core_mechanism":
+        payoff -= 0.06
+    if before_state and after_state and before_state.lower() == after_state.lower():
+        payoff -= 0.08
+    novelty_seed = viewer_takeaway or after_state or headline_seed or sentence_text
+    novelty_key = re.sub(r"[^a-z0-9]+", "_", novelty_seed.lower()).strip("_")[:48]
+
     return {
         "intuition_mode": intuition_mode,
+        "intuition_role": intuition_role,
+        "intuition_payoff": round(max(0.0, min(payoff, 1.0)), 3),
+        "novelty_key": novelty_key,
         "story_window": story_window,
         "before_state": before_state,
         "after_state": after_state,
@@ -1004,11 +1069,20 @@ def build_visual_context_cards(
             "visualizability": visualizability,
             "semantic_frame": semantic_frame,
             "intuition_mode": semantic_frame.get("intuition_mode", ""),
+            "intuition_role": semantic_frame.get("intuition_role", ""),
+            "intuition_payoff": float(semantic_frame.get("intuition_payoff") or 0.0),
+            "novelty_key": semantic_frame.get("novelty_key", ""),
             "suggested_composition": suggested_composition,
             "style_pack": style_pack,
             "suggested_renderer": _default_renderer_hint({"visual_type_hint": visual_type_hint}),
         }
-        row["priority"] = _visual_priority(row)
+        row["priority"] = round(
+            _visual_priority(row)
+            + (float(row.get("intuition_payoff") or 0.0) - 0.5) * 26
+            + (7.0 if str(row.get("intuition_role") or "") == "core_mechanism" else 0.0)
+            - (10.0 if str(row.get("intuition_role") or "") == "supporting_example" else 0.0),
+            2,
+        )
         cards.append(row)
     return cards
 
@@ -1026,6 +1100,8 @@ def _format_cards_for_llm(cards: list[dict[str, Any]]) -> str:
                     (
                         "Intuition: "
                         f"mode={card.get('semantic_frame', {}).get('intuition_mode', '')} | "
+                        f"role={card.get('semantic_frame', {}).get('intuition_role', '')} | "
+                        f"payoff={card.get('semantic_frame', {}).get('intuition_payoff', '')} | "
                         f"before={card.get('semantic_frame', {}).get('before_state', '')} | "
                         f"after={card.get('semantic_frame', {}).get('after_state', '')} | "
                         f"takeaway={card.get('semantic_frame', {}).get('viewer_takeaway', '')}"
@@ -1529,19 +1605,37 @@ def _resequence_visual_ids(plan: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _candidate_pool(cards: list[dict[str, Any]], max_visuals: int) -> list[dict[str, Any]]:
     ranked = sorted(cards, key=lambda item: (item["priority"], -item["start"]), reverse=True)
     pool: list[dict[str, Any]] = []
+    seen_novelty: set[str] = set()
     for card in ranked:
         visualizability = float(card.get("visualizability") or 0.0)
         numeric_hits = int(card.get("numeric_hits") or 0)
         process_cues = float(card.get("process_cues") or 0.0)
         contrast_cues = float(card.get("contrast_cues") or 0.0)
         generic_penalty = float(card.get("generic_penalty") or 0.0)
+        intuition_role = str(card.get("intuition_role") or "")
+        intuition_payoff = float(card.get("intuition_payoff") or 0.0)
+        novelty_key = str(card.get("novelty_key") or "")
         if visualizability < 0.42 and numeric_hits == 0 and process_cues < 0.25 and contrast_cues < 0.25:
             continue
         if generic_penalty > 0.74 and visualizability < 0.55:
             continue
+        if intuition_payoff < 0.56:
+            continue
+        if intuition_role == "supporting_example" and intuition_payoff < 0.68:
+            continue
+        if novelty_key and novelty_key in seen_novelty:
+            continue
         if any(abs(card["start"] - existing["start"]) < 0.6 for existing in pool):
             continue
+        if intuition_role == "core_mechanism" and any(
+            str(existing.get("intuition_role") or "") == "core_mechanism"
+            and abs(float(card["start"]) - float(existing["start"])) < 11.5
+            for existing in pool
+        ):
+            continue
         pool.append(card)
+        if novelty_key:
+            seen_novelty.add(novelty_key)
         if len(pool) >= max(max_visuals * 3, 10):
             break
     return pool
@@ -1556,14 +1650,15 @@ def _should_use_fast_plan(candidate_cards: list[dict[str, Any]], max_visuals: in
     for card in head:
         visualizability = float(card.get("visualizability") or 0.0)
         generic_penalty = float(card.get("generic_penalty") or 0.0)
+        intuition_payoff = float(card.get("intuition_payoff") or 0.0)
         explicit_signal = (
             int(card.get("numeric_hits") or 0) > 0
             or float(card.get("process_cues") or 0.0) >= 0.42
             or float(card.get("contrast_cues") or 0.0) >= 0.4
         )
-        if explicit_signal and visualizability >= 0.68 and generic_penalty <= 0.36:
+        if explicit_signal and visualizability >= 0.68 and generic_penalty <= 0.36 and intuition_payoff >= 0.68:
             strong += 1
-        if visualizability < 0.55 or generic_penalty > 0.58:
+        if visualizability < 0.55 or generic_penalty > 0.58 or intuition_payoff < 0.58:
             ambiguous += 1
     needed = min(max_visuals, 3)
     return strong >= max(1, needed) and ambiguous <= 1
@@ -1643,19 +1738,86 @@ def fallback_visual_plan(
         )
         if len(fallback) >= candidate_budget:
             break
-    return _resequence_visual_ids(
-        _normalize_visual_plan(
-            fallback,
-            cards,
-            clip_duration,
-            max_visuals,
-            min_visual_sec,
-            max_visual_sec,
-            scene_cuts,
-            available_renderers,
-            prefer_premium=prefer_premium,
-        )
+    normalized_fallback = _normalize_visual_plan(
+        fallback,
+        cards,
+        clip_duration,
+        max_visuals,
+        min_visual_sec,
+        max_visual_sec,
+        scene_cuts,
+        available_renderers,
+        prefer_premium=prefer_premium,
     )
+    normalized_fallback = _prune_low_intuition_plan(
+        normalized_fallback,
+        cards,
+        max_visuals=max_visuals,
+        prefer_premium=prefer_premium,
+    )
+    return _resequence_visual_ids(normalized_fallback)
+
+
+def _prune_low_intuition_plan(
+    plan: list[dict[str, Any]],
+    cards: list[dict[str, Any]],
+    *,
+    max_visuals: int,
+    prefer_premium: bool,
+) -> list[dict[str, Any]]:
+    if not plan:
+        return []
+    card_by_id = {str(card.get("card_id") or ""): card for card in cards}
+    kept: list[dict[str, Any]] = []
+    seen_novelty: set[str] = set()
+    has_core = False
+    metric_count = 0
+    last_core_start: float | None = None
+    for item in sorted(plan, key=lambda value: float(value.get("start") or 0.0)):
+        card = card_by_id.get(str(item.get("card_id") or ""), {})
+        intuition_role = str(card.get("intuition_role") or "")
+        intuition_mode = str(card.get("intuition_mode") or "")
+        intuition_payoff = float(card.get("intuition_payoff") or 0.0)
+        novelty_key = str(card.get("novelty_key") or "")
+        confidence = float(item.get("confidence") or 0.0)
+        min_payoff = 0.62 if prefer_premium else 0.56
+        if intuition_payoff < min_payoff:
+            continue
+        if intuition_role == "supporting_example":
+            if has_core or intuition_payoff < 0.76:
+                continue
+        if has_core and intuition_role == "concrete_proof" and intuition_payoff < 0.82:
+            continue
+        if intuition_mode == "metric_proof":
+            if metric_count >= 1 and intuition_payoff < 0.86:
+                continue
+            if prefer_premium and has_core and confidence < 0.9:
+                continue
+        if novelty_key and novelty_key in seen_novelty:
+            continue
+        current_start = float(item.get("start") or 0.0)
+        if intuition_role == "core_mechanism" and last_core_start is not None and abs(current_start - last_core_start) < 11.5:
+            continue
+        kept.append(item)
+        if novelty_key:
+            seen_novelty.add(novelty_key)
+        if intuition_role == "core_mechanism":
+            has_core = True
+            last_core_start = current_start
+        if intuition_mode == "metric_proof":
+            metric_count += 1
+        if len(kept) >= max_visuals:
+            break
+    if not kept:
+        best = max(
+            plan,
+            key=lambda item: (
+                float((card_by_id.get(str(item.get("card_id") or ""), {}) or {}).get("intuition_payoff") or 0.0),
+                float(item.get("confidence") or 0.0),
+            ),
+        )
+        kept = [best]
+    return _resequence_visual_ids(kept)
 
 
 def _backfill_plan_with_fallback(
@@ -1663,7 +1825,10 @@ def _backfill_plan_with_fallback(
     fallback: list[dict[str, Any]],
     *,
     max_visuals: int,
+    prefer_premium: bool,
 ) -> list[dict[str, Any]]:
+    if prefer_premium and primary:
+        return _resequence_visual_ids(sorted(primary, key=lambda item: float(item.get("start") or 0.0))[:max_visuals])
     merged = list(primary)
     seen_card_ids = {str(item.get("card_id") or "") for item in merged}
     for candidate in fallback:
@@ -1730,6 +1895,7 @@ def analyze_visual_plan_with_llm(
     system_prompt = (
         "You are a senior motion graphics director planning precise generated visuals for an explainer video. "
         "Choose only transcript beats where a custom animation would make the spoken idea clearer. "
+        "Prefer fewer visuals when only one or two beats actually create intuition. One excellent visual beats three mediocre ones. "
         "Prefer concise, literal, high-signal visuals with strong editorial taste. "
         "Do not create generic motivational cards. If a beat is vague or low-signal, skip it. "
         "Distill the copy. Do not simply repeat the spoken sentence as the headline. "
@@ -1755,6 +1921,7 @@ def analyze_visual_plan_with_llm(
         f"{avoid_card_line}"
         f"Candidate transcript cards:\n{truncate(_format_cards_for_llm(candidate_cards), 8200)}\n\n"
         "Pick the strongest beats only. Avoid generic filler. "
+        "Use intuition_role and intuition_payoff aggressively: core_mechanism beats are best, concrete_proof beats are optional, supporting_example beats are usually not worth a premium visual. "
         "Favor data_journey for quantitative replace beats, signal_network or kinetic_route for process beats, spotlight_compare for contrasts, interface_cascade for UI/product beats, and ribbon_quote only when the line is truly memorable. "
         "Use the older editorial templates mainly for picture-in-picture or lightweight overlays, not for premium full-screen generated visuals. "
         "Prefer manim for premium custom diagrams, motion systems, and custom replace visuals that can exploit the full Manim library, ffmpeg for simple clean picture-in-picture cards, and blender only for cinematic synthetic shots when available. "
@@ -1779,7 +1946,18 @@ def analyze_visual_plan_with_llm(
     )
     if not normalized_director:
         return fallback
-    normalized_director = _backfill_plan_with_fallback(normalized_director, fallback, max_visuals=max_visuals)
+    normalized_director = _prune_low_intuition_plan(
+        normalized_director,
+        cards,
+        max_visuals=max_visuals,
+        prefer_premium=prefer_premium,
+    )
+    normalized_director = _backfill_plan_with_fallback(
+        normalized_director,
+        fallback,
+        max_visuals=max_visuals,
+        prefer_premium=prefer_premium,
+    )
     if not _should_run_critic(normalized_director):
         return _resequence_visual_ids(normalized_director or fallback)
 
@@ -1816,7 +1994,18 @@ def analyze_visual_plan_with_llm(
             prefer_premium=prefer_premium,
         )
         if normalized_critic:
-            normalized_critic = _backfill_plan_with_fallback(normalized_critic, fallback, max_visuals=max_visuals)
+            normalized_critic = _prune_low_intuition_plan(
+                normalized_critic,
+                cards,
+                max_visuals=max_visuals,
+                prefer_premium=prefer_premium,
+            )
+            normalized_critic = _backfill_plan_with_fallback(
+                normalized_critic,
+                fallback,
+                max_visuals=max_visuals,
+                prefer_premium=prefer_premium,
+            )
         return _resequence_visual_ids(normalized_critic or normalized_director or fallback)
     except Exception:
         return _resequence_visual_ids(normalized_director or fallback)

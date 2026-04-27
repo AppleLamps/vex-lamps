@@ -266,23 +266,28 @@ def _timeline(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
     nodes = VGroup()
     labels = VGroup()
     for index, (anchor, term) in enumerate(zip(anchors, terms), start=1):
-        node = scene.make_signal_node(term, number=index, radius=0.42, color=scene.theme_color("panel_stroke"))
+        node = scene.make_signal_node("", number=index, radius=0.38, color=scene.theme_color("panel_stroke"))
         node.move_to(anchor)
-        rail = Line(anchor, anchor + (UP if index % 2 else DOWN) * 0.78, color=scene.theme_color("panel_stroke"), stroke_width=3, stroke_opacity=0.6)
-        label = scene.make_ribbon_label(term, max_width=2.5)
-        label.next_to(rail.get_end(), UP if index % 2 else DOWN, buff=0.14)
+        label_direction = UP
+        rail = Line(anchor, anchor + label_direction * 0.9, color=scene.theme_color("panel_stroke"), stroke_width=3, stroke_opacity=0.72)
+        label = scene.make_ribbon_label(term, max_width=2.6)
+        label.next_to(rail.get_end(), label_direction, buff=0.18)
         nodes.add(node)
         labels.add(VGroup(rail, label))
     pulse = scene.make_glow_dot(color=scene.theme_color("accent")).move_to(anchors[0])
-    footer = scene.fit_text(
-        str(spec.get("deck") or spec.get("footer_text") or ""),
-        max_width=8.2,
-        max_font_size=20,
-        min_font_size=14,
-        max_lines=2,
-        color=scene.theme_color("text_secondary"),
-    )
-    footer.move_to(DOWN * 3.0)
+    footer_text = str(spec.get("deck") or spec.get("footer_text") or "").strip()
+    dedupe_terms = {term.lower() for term in terms}
+    footer = VGroup()
+    if footer_text and footer_text.lower() not in dedupe_terms:
+        footer = scene.fit_text(
+            footer_text,
+            max_width=8.2,
+            max_font_size=20,
+            min_font_size=14,
+            max_lines=2,
+            color=scene.theme_color("text_secondary"),
+        )
+        footer.move_to(DOWN * 2.85)
     scene.register_layout_group("timeline_route", VGroup(route, nodes, labels, pulse), role="diagram")
     if len(footer) > 0:
         scene.register_layout_group("timeline_footer", footer, role="footer")
