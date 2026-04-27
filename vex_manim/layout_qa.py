@@ -261,8 +261,10 @@ def analyze_layout_snapshot(snapshot: dict[str, Any], brief: SceneBrief) -> Layo
             issues.append("The composition still reads like boxed editorial cards rather than a bespoke animation.")
         if text_count >= 6 and connector_count == 0 and registered_count <= 6:
             issues.append("Too many separate text-led groups are carrying the frame; consolidate the copy into a stronger visual system.")
+        if registered_count <= 3 and connector_count == 0 and panel_count >= 1:
+            issues.append("Too few principal layout groups were registered for a full-screen replace visual; the structure feels under-authored.")
 
-    if brief.animation_intensity in {"medium", "high"} and action_count >= 20:
+    if brief.animation_intensity in {"medium", "high"} and action_count >= 16:
         issues.append("The runtime had to apply many layout guardrails; the composition is probably over-constrained.")
 
     deduped: list[str] = []

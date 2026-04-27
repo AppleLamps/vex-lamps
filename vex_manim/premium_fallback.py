@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from manim import (
@@ -56,6 +57,57 @@ def _unique_terms(spec: dict[str, Any], *, limit: int = 4) -> list[str]:
     return items
 
 
+def _compact_phrase(text: Any, *, max_words: int = 3, max_chars: int = 22) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip(" -,\n\t")
+    if not cleaned:
+        return ""
+    tokens = re.findall(r"[A-Za-z0-9%+.-]+(?:'[A-Za-z0-9%+.-]+)*", cleaned)
+    if not tokens:
+        return cleaned[:max_chars]
+    filler = {
+        "the", "a", "an", "this", "that", "these", "those", "we", "you", "it", "they", "our", "your", "their",
+        "to", "for", "with", "by", "in", "on", "of", "but", "so", "because",
+    }
+    trailing = filler | {"is", "are", "was", "were", "be", "being", "been", "have", "has", "had", "do", "does", "did"}
+    kept: list[str] = []
+    for token in tokens:
+        lowered = token.lower()
+        if not kept and lowered in filler:
+            continue
+        kept.append(token)
+        if len(kept) >= max_words:
+            break
+    candidate = " ".join(kept).strip() or " ".join(tokens[:max_words]).strip()
+    while candidate:
+        tail = candidate.split()[-1].lower()
+        if tail not in trailing:
+            break
+        candidate = " ".join(candidate.split()[:-1]).strip()
+    if len(candidate) > max_chars:
+        candidate = candidate[:max_chars].rstrip()
+    return candidate or cleaned[:max_chars]
+
+
+def _process_terms(spec: dict[str, Any], *, limit: int = 4) -> list[str]:
+    terms: list[str] = []
+    for candidate in [
+        *(spec.get("steps") or []),
+        *(spec.get("supporting_lines") or []),
+        spec.get("headline"),
+        spec.get("deck"),
+        spec.get("sentence_text"),
+        spec.get("context_text"),
+    ]:
+        compact = _compact_phrase(candidate, max_words=3, max_chars=20)
+        lowered = compact.lower()
+        if not compact or lowered in {item.lower() for item in terms}:
+            continue
+        terms.append(compact)
+        if len(terms) >= limit:
+            break
+    return terms
+
+
 def _title(scene, spec: dict[str, Any]):
     title = scene.make_title_block(
         eyebrow=str(spec.get("eyebrow") or ""),
@@ -69,10 +121,10 @@ def _title(scene, spec: dict[str, Any]):
 
 
 def _node_label_fallback(spec: dict[str, Any], index: int, default: str) -> str:
-    terms = _unique_terms(spec, limit=4)
+    terms = _process_terms(spec, limit=4)
     if index < len(terms):
         return str(terms[index])
-    return default
+    return _compact_phrase(default, max_words=2, max_chars=16) or default
 
 
 def _metric_story(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
@@ -108,9 +160,9 @@ def _metric_story(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
     pulse = scene.make_glow_dot(color=scene.theme_color("accent")).move_to(graph_points[0])
     scene.register_layout_group("metric_graph", VGroup(axes, graph, pulse), role="chart")
 
-    terms = _unique_terms(spec, limit=2)
+    terms = [_compact_phrase(term, max_words=3, max_chars=22) for term in _unique_terms(spec, limit=2)]
     support = VGroup(
-        *[scene.make_ribbon_label(term, max_width=3.1) for term in terms]
+        *[scene.make_ribbon_label(term, max_width=2.6) for term in terms if term]
     )
     if len(support) > 0:
         support.arrange(DOWN, buff=0.36, aligned_edge=LEFT)
@@ -134,9 +186,13 @@ def _metric_story(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
 def _system_map(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
     intro, develop, resolve, settle = _duration(spec, brief)
     title = _title(scene, spec)
-    source = scene.make_signal_node(_node_label_fallback(spec, 0, "Start"), radius=0.58, color=scene.theme_color("accent_secondary"))
-    hub = scene.make_signal_node(str(spec.get("headline") or "Core Loop"), radius=0.82, color=scene.theme_color("panel_stroke"))
-    destination = scene.make_signal_node(_node_label_fallback(spec, 1, "Outcome"), radius=0.58, color=scene.theme_color("accent"))
+    terms = _process_terms(spec, limit=4)
+    source_label = terms[0] if len(terms) >= 1 else _node_label_fallback(spec, 0, "Start")
+    hub_label = _compact_phrase(str(spec.get("headline") or "Core Loop"), max_words=3, max_chars=20) or "Core Loop"
+    destination_label = terms[1] if len(terms) >= 2 else _node_label_fallback(spec, 1, "Outcome")
+    source = scene.make_signal_node(source_label, radius=0.62, color=scene.theme_color("accent_secondary"))
+    hub = scene.make_signal_node(hub_label, radius=0.86, color=scene.theme_color("panel_stroke"))
+    destination = scene.make_signal_node(destination_label, radius=0.62, color=scene.theme_color("accent"))
     source.move_to(LEFT * 4.25 + DOWN * 1.35)
     hub.move_to(ORIGIN + DOWN * 0.05)
     destination.move_to(RIGHT * 4.0 + UP * 1.05)
@@ -145,16 +201,9 @@ def _system_map(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
     path_a = scene.make_route_path(source.get_right() + RIGHT * 0.12, hub.get_left() + LEFT * 0.08, bend=-0.28, color=scene.theme_color("accent_secondary"))
     path_b = scene.make_route_path(hub.get_right() + RIGHT * 0.08, destination.get_left() + LEFT * 0.12, bend=0.24, color=scene.theme_color("accent"))
     pulse = scene.make_glow_dot(color=scene.theme_color("accent")).move_to(source.get_right() + RIGHT * 0.12)
-    footer = scene.make_metric_badge(
-        str(spec.get("emphasis_text") or "Build"),
-        label=str(spec.get("deck") or "Iterate"),
-        width=2.8,
-    )
-    footer.move_to(hub.get_center() + DOWN * 1.65)
 
     scene.register_layout_group("network_nodes", VGroup(source, hub, destination), role="hero")
     scene.register_layout_group("network_paths", VGroup(path_a, path_b, ring, beam, pulse), role="diagram")
-    scene.register_layout_group("network_footer", footer, role="support")
 
     scene.play(
         FadeIn(title, shift=DOWN * 0.16),
@@ -171,7 +220,7 @@ def _system_map(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
         scene.camera_focus(hub, scale=0.9, run_time=develop),
         run_time=develop,
     )
-    scene.play(FadeIn(footer, shift=UP * 0.12), run_time=resolve)
+    scene.play(FadeIn(ring.copy().scale(1.06), scale=1.01), run_time=resolve * 0.72)
     scene.wait(settle)
 
 
@@ -180,8 +229,8 @@ def _comparison(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
     title = _title(scene, spec)
     left_panel = scene.make_glass_panel(3.2, 2.25, stroke=scene.theme_color("panel_stroke"), fill=scene.theme_color("panel_fill"))
     right_panel = scene.make_glass_panel(3.2, 2.25, stroke=scene.theme_color("accent"), fill=scene.theme_color("panel_fill"))
-    left_text = scene.fit_text(str(spec.get("left_detail") or "Before"), max_width=2.5, max_font_size=26, min_font_size=16)
-    right_text = scene.fit_text(str(spec.get("right_detail") or "After"), max_width=2.5, max_font_size=26, min_font_size=16)
+    left_text = scene.fit_text(str(spec.get("left_detail") or "Before"), max_width=2.4, max_font_size=24, min_font_size=14, max_lines=3)
+    right_text = scene.fit_text(str(spec.get("right_detail") or "After"), max_width=2.4, max_font_size=24, min_font_size=14, max_lines=3)
     left_group = VGroup(left_panel, left_text.move_to(left_panel.get_center()))
     right_group = VGroup(right_panel, right_text.move_to(right_panel.get_center()))
     left_group.move_to(LEFT * 3.0 + DOWN * 0.1)
@@ -206,7 +255,7 @@ def _comparison(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
 def _timeline(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
     intro, develop, resolve, settle = _duration(spec, brief)
     title = _title(scene, spec)
-    terms = _unique_terms(spec, limit=4) or ["Start", "Build", "Learn", "Ship"]
+    terms = _process_terms(spec, limit=4) or ["Start", "Build", "Learn", "Ship"]
     anchors = [
         LEFT * 4.6 + DOWN * 1.55,
         LEFT * 1.7 + DOWN * 0.85,
@@ -220,12 +269,19 @@ def _timeline(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
         node = scene.make_signal_node(term, number=index, radius=0.42, color=scene.theme_color("panel_stroke"))
         node.move_to(anchor)
         rail = Line(anchor, anchor + (UP if index % 2 else DOWN) * 0.78, color=scene.theme_color("panel_stroke"), stroke_width=3, stroke_opacity=0.6)
-        label = scene.make_ribbon_label(term, max_width=2.8)
+        label = scene.make_ribbon_label(term, max_width=2.5)
         label.next_to(rail.get_end(), UP if index % 2 else DOWN, buff=0.14)
         nodes.add(node)
         labels.add(VGroup(rail, label))
     pulse = scene.make_glow_dot(color=scene.theme_color("accent")).move_to(anchors[0])
-    footer = scene.fit_text(str(spec.get("deck") or spec.get("footer_text") or ""), max_width=8.2, max_font_size=22, min_font_size=15, color=scene.theme_color("text_secondary"))
+    footer = scene.fit_text(
+        str(spec.get("deck") or spec.get("footer_text") or ""),
+        max_width=8.2,
+        max_font_size=20,
+        min_font_size=14,
+        max_lines=2,
+        color=scene.theme_color("text_secondary"),
+    )
     footer.move_to(DOWN * 3.0)
     scene.register_layout_group("timeline_route", VGroup(route, nodes, labels, pulse), role="diagram")
     if len(footer) > 0:
@@ -260,10 +316,10 @@ def _kinetic(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
         color=scene.theme_color("accent_secondary"),
     )
     pulse = scene.make_glow_dot(color=scene.theme_color("accent")).move_to(ribbon_path.get_start())
-    terms = _unique_terms(spec, limit=3) or [str(spec.get("emphasis_text") or "Build")]
+    terms = _process_terms(spec, limit=3) or [_compact_phrase(str(spec.get("emphasis_text") or "Build"), max_words=3, max_chars=18)]
     ribbons = VGroup()
     for idx, term in enumerate(terms):
-        label = scene.make_ribbon_label(term, max_width=2.7)
+        label = scene.make_ribbon_label(term, max_width=2.5)
         anchor = ribbon_path.point_from_proportion(min(0.2 + idx * 0.28, 0.86))
         label.move_to(anchor + UP * (0.72 if idx % 2 == 0 else -0.62))
         ribbons.add(label)
@@ -282,11 +338,11 @@ def _kinetic(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
 def _interface(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
     intro, develop, resolve, settle = _duration(spec, brief)
     title = _title(scene, spec)
-    terms = _unique_terms(spec, limit=3) or ["Capture", "Refine", "Ship"]
+    terms = _process_terms(spec, limit=3) or ["Capture", "Refine", "Ship"]
     modules = VGroup()
     for index, term in enumerate(terms):
         panel = scene.make_glass_panel(2.55, 1.62, stroke=scene.theme_color("panel_stroke"), fill=scene.theme_color("panel_fill"))
-        label = scene.fit_text(term, max_width=1.9, max_font_size=24, min_font_size=15)
+        label = scene.fit_text(term, max_width=1.8, max_font_size=22, min_font_size=13, max_lines=3)
         stack = VGroup(panel, label.move_to(panel.get_center()))
         stack.move_to(LEFT * (3.2 - index * 3.2) + DOWN * (0.1 if index == 1 else 0.45))
         modules.add(stack)

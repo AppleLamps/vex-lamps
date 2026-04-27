@@ -239,6 +239,7 @@ class VexGeneratedScene(MovingCameraScene):
         max_width: float | None = None,
         max_font_size: int | None = None,
         min_font_size: int = 16,
+        max_lines: int = 4,
         color: str | None = None,
         weight=BOLD,
         slant=NORMAL,
@@ -262,13 +263,13 @@ class VexGeneratedScene(MovingCameraScene):
                 slant=slant,
             )
 
-        def wrap_variant(content: str, size: int, *, max_lines: int = 4) -> str:
+        def wrap_variant(content: str, size: int) -> str:
             words = [word for word in content.split(" ") if word]
             if len(words) <= 1:
                 return content
             best_variant = content
             best_overflow = max(render_candidate(content, size).width - resolved_max_width, 0.0)
-            for line_limit in range(2, max_lines + 1):
+            for line_limit in range(2, max(max_lines, 2) + 1):
                 lines: list[str] = []
                 current: list[str] = []
                 success = True
@@ -465,8 +466,24 @@ class VexGeneratedScene(MovingCameraScene):
             badge = Text(str(number), font_size=22, color=ManimColor(self.theme_color("accent")), weight=BOLD)
             badge.next_to(circle.get_top(), DOWN, buff=0.24)
             parts.append(badge)
-        text = self.fit_text(label, max_width=radius * 2.0, max_font_size=24, min_font_size=16)
-        text.move_to(circle.get_center() + DOWN * 0.08)
+        text = self.fit_text(
+            label,
+            max_width=max(radius * 1.56, 0.92),
+            max_font_size=max(18, int(18 + radius * 8)),
+            min_font_size=11,
+            max_lines=3,
+        )
+        max_text_width = max(radius * 1.54, 0.88)
+        max_text_height = max(radius * 1.12, 0.72)
+        if float(text.width) > max_text_width or float(text.height) > max_text_height:
+            scale_factor = min(
+                max_text_width / max(float(text.width), 1e-6),
+                max_text_height / max(float(text.height), 1e-6),
+                1.0,
+            )
+            if scale_factor < 0.995:
+                text.scale(max(scale_factor, 0.62))
+        text.move_to(circle.get_center())
         parts.append(text)
         return VGroup(*parts)
 
@@ -665,18 +682,20 @@ class VexGeneratedScene(MovingCameraScene):
         if label_text:
             label_mob = self.fit_text(
                 label_text.upper(),
-                max_width=max(width * 1.6, 2.8),
-                max_font_size=16,
-                min_font_size=10,
+                max_width=max(width * 1.38, 2.3),
+                max_font_size=14,
+                min_font_size=9,
+                max_lines=2,
                 color=self.theme_color("eyebrow_text"),
                 weight=BOLD,
             )
             stack.add(label_mob)
         value_line = self.fit_text(
             " ".join(part for part in [value_text, unit_text] if part).strip(),
-            max_width=max(width * 1.9, 2.8),
-            max_font_size=30,
-            min_font_size=16,
+            max_width=max(width * 1.48, 2.4),
+            max_font_size=26,
+            min_font_size=13,
+            max_lines=2,
             color=resolved_text_color,
             weight=BOLD,
         )
@@ -707,15 +726,17 @@ class VexGeneratedScene(MovingCameraScene):
         **_: Any,
     ) -> VGroup:
         resolved_accent = accent or color or self.theme_color("accent")
-        line = Line(LEFT * 1.6, RIGHT * 1.6, color=ManimColor(resolved_accent), stroke_width=5)
         label = self.fit_text(
             text,
             max_width=max_width,
-            max_font_size=34,
-            min_font_size=18,
+            max_font_size=28,
+            min_font_size=15,
+            max_lines=2,
             color=text_color or self.theme_color("text_primary"),
             weight=BOLD,
         )
+        half_width = max(1.2, min(max_width / 2.0, max(float(label.width) * 0.58, 1.4)))
+        line = Line(LEFT * half_width, RIGHT * half_width, color=ManimColor(resolved_accent), stroke_width=5)
         label.next_to(line, UP, buff=0.18)
         return VGroup(line, label)
 
@@ -1301,7 +1322,7 @@ class VexGeneratedScene(MovingCameraScene):
         )
 
     def _fit_text_inside_panels(self, entries: list[dict[str, Any]]) -> None:
-        panels = [entry for entry in entries if entry.get("role") == "panel"]
+        panels = [entry for entry in entries if entry.get("role") == "panel" or self._is_panel_like(entry["mob"])]
         texts = [entry for entry in entries if self._is_text_based(entry["mob"])]
         for text_entry in texts:
             if not text_entry.get("allow_scale_down"):
@@ -1317,13 +1338,13 @@ class VexGeneratedScene(MovingCameraScene):
                 scale_height = max_height / max(text_box["height"], 1e-6)
                 scale_factor = min(scale_width, scale_height, 1.0)
                 if scale_factor < 0.97:
-                    text_entry["mob"].scale(max(scale_factor, 0.78))
+                    text_entry["mob"].scale(max(scale_factor, 0.68))
                     text_entry["mob"].move_to(panel_entry["mob"].get_center())
                     self._record_guardrail_action(
                         "fit_text_inside_panel",
                         text_entry["name"],
                         panel=panel_entry["name"],
-                        factor=round(max(scale_factor, 0.78), 4),
+                        factor=round(max(scale_factor, 0.68), 4),
                     )
 
     def _resolve_overlap(self, first: dict[str, Any], second: dict[str, Any], *, safe_bounds: dict[str, float], frame_bounds: dict[str, float]) -> bool:

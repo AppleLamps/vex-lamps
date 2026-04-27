@@ -177,9 +177,13 @@ GENERIC_ABSTRACT_TERMS = {
 }
 FILLER_LEAD_WORDS = {
     "the", "a", "an", "this", "that", "these", "those", "we", "you", "it", "they", "our",
-    "your", "their", "to", "for", "with", "by", "in", "on", "of",
+    "your", "their", "to", "for", "with", "by", "in", "on", "of", "but", "so", "because",
 }
-TRAILING_TRIM_WORDS = {"with", "by", "to", "for", "and", "or", "of", "in", "on", "a", "an", "the", "then", "next", "finally"}
+TRAILING_TRIM_WORDS = {
+    "with", "by", "to", "for", "and", "or", "of", "in", "on", "a", "an", "the", "then", "next", "finally",
+    "they", "them", "it", "its", "we", "you", "he", "she", "their", "our", "your",
+    "is", "are", "was", "were", "be", "being", "been", "have", "has", "had", "do", "does", "did",
+}
 DISTILL_WORD_PATTERN = re.compile(r"[A-Za-z0-9%+.-]+(?:'[A-Za-z0-9%+.-]+)*")
 BACKGROUND_MOTIFS = ("grid", "rings", "beams", "constellation", "bands")
 PLAN_CACHE_VERSION = "2026-04-26-v3"
@@ -209,6 +213,8 @@ PREMIUM_TEMPLATE_UPGRADES = {
     "quote_focus": "ribbon_quote",
     "keyword_stack": "ribbon_quote",
 }
+
+PREMIUM_FULLSCREEN_TEMPLATES = set(PREMIUM_TEMPLATE_UPGRADES.values())
 
 EDITORIAL_TEMPLATE_DOWNGRADES = {
     "data_journey": "metric_callout",
@@ -260,7 +266,11 @@ def _proper_noun_count(text: str) -> int:
 
 
 def _split_fragments(text: str, *, limit: int = 6) -> list[str]:
-    raw = re.split(r"(?:[.;:!?]|\b(?:and then|then|next|finally|because|so|while)\b|,)", str(text or ""), flags=re.IGNORECASE)
+    raw = re.split(
+        r"(?:[.;:!?]|\b(?:and then|then|next|finally|because|so|while|but|instead)\b|,)",
+        str(text or ""),
+        flags=re.IGNORECASE,
+    )
     fragments: list[str] = []
     for part in raw:
         cleaned = re.sub(r"\s+", " ", part).strip(" -,\n\t")
@@ -315,11 +325,22 @@ def _display_case(text: str) -> str:
     return value[0].upper() + value[1:]
 
 
+def _limit_copy_words(text: str, *, max_words: int, max_chars: int) -> str:
+    tokens = str(text or "").split()
+    if not tokens:
+        return ""
+    clipped = " ".join(tokens[: max(max_words, 1)])
+    if len(clipped) > max_chars:
+        clipped = truncate(clipped, max_chars)
+    return clipped.strip()
+
+
 def _polish_visual_copy(text: Any, *, max_words: int, max_chars: int) -> str:
     value = str(text or "").strip()
     if not value:
         return ""
-    return _display_case(_distill_phrase(value, max_words=max_words, max_chars=max_chars))
+    polished = _display_case(_distill_phrase(value, max_words=max_words, max_chars=max_chars))
+    return _display_case(_limit_copy_words(polished, max_words=max_words, max_chars=max_chars))
 
 
 def _generic_penalty(text: str) -> float:
@@ -881,15 +902,16 @@ def _extract_emphasis_text(card: dict[str, Any]) -> str:
     return truncate(text, 32)
 
 
-def _coerce_string_list(raw: Any, limit: int, max_chars: int) -> list[str]:
+def _coerce_string_list(raw: Any, limit: int, max_chars: int, *, max_words: int | None = None) -> list[str]:
+    resolved_max_words = max_words if max_words is not None else (4 if max_chars <= 30 else 7)
     if isinstance(raw, list):
         values = [
-            _polish_visual_copy(item, max_words=4 if max_chars <= 30 else 7, max_chars=max_chars)
+            _polish_visual_copy(item, max_words=resolved_max_words, max_chars=max_chars)
             for item in raw
             if str(item).strip()
         ]
     elif str(raw or "").strip():
-        values = [_polish_visual_copy(raw, max_words=4 if max_chars <= 30 else 7, max_chars=max_chars)]
+        values = [_polish_visual_copy(raw, max_words=resolved_max_words, max_chars=max_chars)]
     else:
         values = []
     return values[:limit]
@@ -909,16 +931,83 @@ def _promote_composition_for_premium(
     process_cues = float(card.get("process_cues") or 0.0)
     contrast_cues = float(card.get("contrast_cues") or 0.0)
     generic_penalty = float(card.get("generic_penalty") or 0.0)
+    scene_distance = float(card.get("scene_distance") or 0.0)
     explicit_signal = numeric_hits > 0 or process_cues >= 0.34 or contrast_cues >= 0.28
     if replace_safety >= 0.72 and visualizability >= 0.46 and generic_penalty <= 0.56:
         return "replace"
     if replace_safety >= 0.56 and visualizability >= 0.5:
+        return "replace"
+    if process_cues >= 0.46 and scene_distance >= 1.8 and visualizability >= 0.45 and generic_penalty <= 0.32:
         return "replace"
     if replace_safety >= 0.48 and explicit_signal and visualizability >= 0.42:
         return "replace"
     if replace_safety >= 0.44 and numeric_hits >= 1 and visualizability >= 0.66:
         return "replace"
     return composition_mode
+
+
+def _text_limits_for_visual(
+    *,
+    template: str,
+    composition_mode: str,
+    short_slot: bool,
+    prefer_premium: bool,
+) -> dict[str, int]:
+    is_replace = composition_mode == "replace"
+    premium_fullscreen = prefer_premium and is_replace and template in PREMIUM_FULLSCREEN_TEMPLATES
+    route_like = template in {"timeline_steps", "system_flow", "kinetic_route", "signal_network"}
+    compare_like = template in {"comparison_split", "spotlight_compare", "interface_cascade"}
+    quote_like = template in {"quote_focus", "keyword_stack", "ribbon_quote"}
+    if premium_fullscreen:
+        return {
+            "headline_words": 4 if short_slot else 5,
+            "headline_chars": 32 if short_slot else 40,
+            "deck_words": 4 if short_slot else 6,
+            "deck_chars": 28 if short_slot else 38,
+            "support_words": 3 if route_like else 4,
+            "support_chars": 22 if route_like else 28,
+            "step_words": 3 if route_like else 4,
+            "step_chars": 18 if route_like else 24,
+            "detail_words": 4 if compare_like else 5,
+            "detail_chars": 26 if compare_like else 32,
+            "quote_words": 8 if quote_like else 10,
+            "quote_chars": 56 if quote_like else 68,
+            "footer_words": 4 if short_slot else 5,
+            "footer_chars": 28 if short_slot else 34,
+        }
+    if is_replace:
+        return {
+            "headline_words": 5 if short_slot else 6,
+            "headline_chars": 36 if short_slot else 46,
+            "deck_words": 5 if short_slot else 7,
+            "deck_chars": 34 if short_slot else 46,
+            "support_words": 4 if route_like else 5,
+            "support_chars": 28 if route_like else 36,
+            "step_words": 4,
+            "step_chars": 24 if route_like else 28,
+            "detail_words": 5,
+            "detail_chars": 34 if compare_like else 40,
+            "quote_words": 10,
+            "quote_chars": 72,
+            "footer_words": 5 if short_slot else 6,
+            "footer_chars": 32 if short_slot else 40,
+        }
+    return {
+        "headline_words": 5 if short_slot else 6,
+        "headline_chars": 38 if short_slot else 48,
+        "deck_words": 6 if short_slot else 8,
+        "deck_chars": 36 if short_slot else 50,
+        "support_words": 5,
+        "support_chars": 42,
+        "step_words": 4,
+        "step_chars": 28,
+        "detail_words": 6,
+        "detail_chars": 42,
+        "quote_words": 10,
+        "quote_chars": 80,
+        "footer_words": 6 if short_slot else 8,
+        "footer_chars": 42 if short_slot else 58,
+    }
 
 
 def _normalize_visual_plan(
@@ -999,20 +1088,59 @@ def _normalize_visual_plan(
         if composition_mode == "picture_in_picture" and not prefer_premium:
             template = EDITORIAL_TEMPLATE_DOWNGRADES.get(template, template)
         template = _upgrade_to_premium_template(card, template, composition_mode)
+        if (
+            prefer_premium
+            and composition_mode == "picture_in_picture"
+            and template in PREMIUM_FULLSCREEN_TEMPLATES
+            and (
+                float(card.get("replace_safety") or 0.0) >= 0.42
+                or (
+                    float(card.get("process_cues") or 0.0) >= 0.44
+                    and float(card.get("scene_distance") or 0.0) >= 1.6
+                    and float(card.get("visualizability") or 0.0) >= 0.44
+                )
+            )
+        ):
+            composition_mode = "replace"
+            start_sec, end_sec = _expand_window_to_duration(
+                start_sec,
+                end_sec,
+                clip_duration=clip_duration,
+                target_duration_sec=min(max(min_visual_sec, MIN_PREMIUM_REPLACE_DURATION_SEC), max_visual_sec),
+                scene_cuts=scene_cuts,
+            )
+            if end_sec - start_sec + epsilon < max(min_visual_sec, MIN_PREMIUM_REPLACE_DURATION_SEC):
+                continue
         position = str(item.get("position") or "bottom_right").strip().lower()
         if position not in {"top_left", "top_right", "bottom_left", "bottom_right", "top", "bottom", "center"}:
             position = "bottom_right"
         scale = round(max(0.24, min(float(item.get("scale", 0.42) or 0.42), 0.8)), 3)
         slot_duration = end_sec - start_sec
         short_slot = slot_duration <= 2.8
-        supporting_lines = _coerce_string_list(item.get("supporting_lines"), limit=3, max_chars=72)
-        keywords = _coerce_string_list(item.get("keywords"), limit=4, max_chars=28)
-        steps = _coerce_string_list(item.get("steps"), limit=4, max_chars=28)
+        text_limits = _text_limits_for_visual(
+            template=template,
+            composition_mode=composition_mode,
+            short_slot=short_slot,
+            prefer_premium=prefer_premium,
+        )
+        supporting_lines = _coerce_string_list(
+            item.get("supporting_lines"),
+            limit=3,
+            max_chars=text_limits["support_chars"],
+            max_words=text_limits["support_words"],
+        )
+        keywords = _coerce_string_list(item.get("keywords"), limit=4, max_chars=24, max_words=3)
+        steps = _coerce_string_list(
+            item.get("steps"),
+            limit=4,
+            max_chars=text_limits["step_chars"],
+            max_words=text_limits["step_words"],
+        )
         derived_headline = _headline_from_card(card)
         headline = _polish_visual_copy(
             item.get("headline") or derived_headline or card["sentence_text"],
-            max_words=5 if short_slot else 6,
-            max_chars=38 if short_slot else 48,
+            max_words=text_limits["headline_words"],
+            max_chars=text_limits["headline_chars"],
         )
         if headline.lower() == str(card.get("sentence_text") or "").strip().lower() or len(headline.split()) > 8:
             headline = derived_headline or truncate(headline, 42)
@@ -1020,8 +1148,8 @@ def _normalize_visual_plan(
         emphasis_text = emphasis_source if re.fullmatch(r"\d+(?:\.\d+)?(?:%|x)?", emphasis_source, flags=re.IGNORECASE) else _polish_visual_copy(emphasis_source, max_words=4, max_chars=34)
         footer_text = _polish_visual_copy(
             item.get("footer_text") or _deck_for_card(card, headline) or card["context_text"],
-            max_words=6 if short_slot else 8,
-            max_chars=42 if short_slot else 58,
+            max_words=text_limits["footer_words"],
+            max_chars=text_limits["footer_chars"],
         )
         style_pack = str(item.get("style_pack") or card["style_pack"] or "editorial_clean").strip().lower()
         if style_pack not in STYLE_PACKS:
@@ -1044,8 +1172,8 @@ def _normalize_visual_plan(
         eyebrow = truncate(str(item.get("eyebrow") or _eyebrow_for_card(card, template)), 18).upper()
         deck = _polish_visual_copy(
             item.get("deck") or _deck_for_card(card, headline),
-            max_words=6 if short_slot else 8,
-            max_chars=36 if short_slot else 50,
+            max_words=text_limits["deck_words"],
+            max_chars=text_limits["deck_chars"],
         )
         background_motif = str(item.get("background_motif") or _background_motif(card, template, style_pack)).strip().lower()
         if background_motif not in BACKGROUND_MOTIFS:
@@ -1071,11 +1199,23 @@ def _normalize_visual_plan(
             "emphasis_text": emphasis_text,
             "supporting_lines": supporting_lines,
             "steps": steps,
-            "quote_text": _polish_visual_copy(item.get("quote_text") or headline, max_words=10, max_chars=80),
+            "quote_text": _polish_visual_copy(
+                item.get("quote_text") or headline,
+                max_words=text_limits["quote_words"],
+                max_chars=text_limits["quote_chars"],
+            ),
             "left_label": truncate(str(item.get("left_label") or "Before"), 28),
             "right_label": truncate(str(item.get("right_label") or "After"), 28),
-            "left_detail": _polish_visual_copy(item.get("left_detail") or card["sentence_text"], max_words=6, max_chars=42),
-            "right_detail": _polish_visual_copy(item.get("right_detail") or card["context_text"], max_words=6, max_chars=42),
+            "left_detail": _polish_visual_copy(
+                item.get("left_detail") or card["sentence_text"],
+                max_words=text_limits["detail_words"],
+                max_chars=text_limits["detail_chars"],
+            ),
+            "right_detail": _polish_visual_copy(
+                item.get("right_detail") or card["context_text"],
+                max_words=text_limits["detail_words"],
+                max_chars=text_limits["detail_chars"],
+            ),
             "footer_text": footer_text,
             "style_pack": style_pack,
             "theme": _theme_for_card(card, style_pack),

@@ -122,14 +122,14 @@ def _objective(spec: dict[str, Any], scene_family: str) -> str:
 def _text_budget_words(spec: dict[str, Any], scene_family: str) -> int:
     composition_mode = str(spec.get("composition_mode") or "replace").strip().lower()
     if composition_mode == "picture_in_picture":
-        return 16
+        return 14
     if scene_family in {"kinetic_quote", "kinetic_stack"}:
-        return 18
+        return 16
     if scene_family == "interface_focus":
-        return 24
+        return 18
     if scene_family in {"system_map", "timeline_journey", "comparison_morph"}:
-        return 22
-    return 20
+        return 16
+    return 18
 
 
 def _minimum_dynamic_devices(scene_family: str, animation_intensity: str) -> int:

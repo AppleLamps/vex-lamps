@@ -19,7 +19,7 @@ from vex_manim.layout_qa import analyze_layout_snapshot, load_layout_snapshot
 from vex_manim.premium_fallback import run_premium_blueprint_scene
 from vex_manim.qa import analyze_preview, evaluate_generated_scene_quality, extract_preview_frames
 from vex_manim.scene_library import retrieve_scene_examples
-from vex_manim.validator import validate_generated_scene_code
+from vex_manim.validator import ValidationReport, profile_scene_code, validate_generated_scene_code
 
 
 MAX_GENERATION_ATTEMPTS = 2
@@ -1205,15 +1205,66 @@ class ManimRenderer(VisualRenderer):
         used_blueprint_compiler = False
         if chosen_scene_source is None:
             used_blueprint_compiler = True
+            compiler_attempt_dir = attempts_root / "blueprint_compiler"
+            compiler_attempt_dir.mkdir(parents=True, exist_ok=True)
+            compiler_spec = dict(spec)
+            compiler_spec["layout_snapshot_path"] = str(compiler_attempt_dir / "layout_snapshot.json")
             chosen_scene_source = _premium_blueprint_wrapper(
-                spec,
+                compiler_spec,
                 brief.to_dict(),
                 selected_blueprint.to_dict(),
             )
-            chosen_quality = {
-                "score": 0.74,
-                "soft_accept": True,
+            compiler_script_path = compiler_attempt_dir / "generated_scene.py"
+            compiler_script_path.write_text(chosen_scene_source, encoding="utf-8")
+            compiler_attempt: dict[str, Any] = {
+                "attempt": "blueprint_compiler",
+                "blueprint_id": selected_blueprint.blueprint_id,
+                "blueprint_archetype": selected_blueprint.archetype,
             }
+            try:
+                preview_video_path = _render_script(
+                    compiler_script_path,
+                    scene_name="GeneratedScene",
+                    media_dir=compiler_attempt_dir / "preview_media",
+                    output_file="GeneratedScenePreview",
+                    width=preview_width,
+                    height=preview_height,
+                    fps=preview_fps,
+                    timeout_sec=config.MANIM_PREVIEW_TIMEOUT_SEC,
+                    stage_label="preview blueprint compiler",
+                )
+                preview_metadata = probe_video(str(preview_video_path))
+                preview_frames = extract_preview_frames(
+                    str(preview_video_path),
+                    compiler_attempt_dir / "preview_frames",
+                    duration_sec=float(preview_metadata.get("duration_sec") or 0.0),
+                    frame_count=preview_frame_count,
+                )
+                preview_report = analyze_preview(
+                    str(preview_video_path),
+                    float(preview_metadata.get("duration_sec") or 0.0),
+                    preview_frames,
+                    theme=_theme_defaults(spec),
+                )
+                layout_report = None
+                compiler_layout_snapshot = compiler_attempt_dir / "layout_snapshot.json"
+                if compiler_layout_snapshot.is_file():
+                    layout_report = analyze_layout_snapshot(load_layout_snapshot(compiler_layout_snapshot), brief)
+                    compiler_attempt["layout"] = layout_report.to_dict()
+                quality = evaluate_generated_scene_quality(brief, ValidationReport(valid=True, errors=[], warnings=[], profile=profile_scene_code(chosen_scene_source)), preview_report, layout=layout_report)
+                soft_accept = _can_soft_accept_quality(brief, ValidationReport(valid=True, errors=[], warnings=[], profile=profile_scene_code(chosen_scene_source)), quality)
+                compiler_attempt["preview"] = preview_report.to_dict()
+                compiler_attempt["quality"] = quality.to_dict()
+                compiler_attempt["quality_soft_accept"] = soft_accept
+                chosen_quality = {**quality.to_dict(), "soft_accept": soft_accept}
+            except Exception as exc:
+                compiler_attempt["preview_error"] = str(exc)
+                chosen_quality = {
+                    "score": 0.66,
+                    "issues": [f"Blueprint compiler preview failed: {exc}"],
+                    "soft_accept": True,
+                }
+            attempts.append(compiler_attempt)
         fallback_used = bool(used_blueprint_compiler)
         write_generation_report(
             report_path,
