@@ -795,6 +795,16 @@ def _has_strong_motion_grammar(brief, validation) -> bool:
     )
 
 
+def _has_solid_compiler_motion_grammar(brief, validation) -> bool:
+    profile = validation.profile
+    return (
+        profile.dynamic_device_count >= max(int(brief.minimum_dynamic_devices), 3)
+        and len(profile.advanced_features) >= 3
+        and profile.premium_helper_calls >= 2
+        and (profile.camera_move_mentions > 0 or profile.play_calls >= 4)
+    )
+
+
 def _is_minor_layout_overlap_issue(issue: str) -> bool:
     cleaned = str(issue or "").strip().lower()
     return "overlaps" in cleaned or "colliding with" in cleaned
@@ -811,6 +821,26 @@ def _is_minor_font_size_issue(issue: str) -> bool:
     if not match:
         return False
     return float(match.group(1)) >= 14.0
+
+
+def _is_severe_compiler_issue(issue: str) -> bool:
+    cleaned = str(issue or "").strip().lower()
+    severe_markers = (
+        "extends outside the safe frame",
+        "falls into the bottom subtitle-safe region",
+        "very small font size",
+        "too wide for comfortable readability",
+        "colliding with",
+        "overlaps",
+        "too dense",
+        "too much visible copy",
+        "reads like a paragraph",
+        "too low-contrast",
+        "too sparse",
+        "too static",
+        "duration drifted",
+    )
+    return any(marker in cleaned for marker in severe_markers)
 
 
 def _should_rotate_blueprint(feedback_lines: list[str] | None) -> bool:
@@ -854,6 +884,11 @@ def _compiler_validation_report(brief, blueprint, scene_source: str) -> Validati
     premium_motion_tokens = ("route", "ring", "beam", "badge", "signal", "connector", "pulse", "glow", "focus")
     dynamic_devices = list(getattr(blueprint, "dynamic_devices", []) or [])
     suggested_features = list(getattr(blueprint, "suggested_features", []) or [])
+    camera_plan_text = str(getattr(blueprint, "camera_plan", "") or "").lower()
+    camera_move_mentions = 1 if any(
+        token in camera_plan_text
+        for token in ("camera", "slide", "zoom", "punch", "reframe", "pan", "drift", "settle")
+    ) else 0
     profile = CodeProfile(
         advanced_features=suggested_features,
         primitive_features=["VGroup"],
@@ -875,11 +910,23 @@ def _compiler_validation_report(brief, blueprint, scene_source: str) -> Validati
             len(set(dynamic_devices)),
             min(max(int(getattr(brief, "minimum_dynamic_devices", 2)) + 1, 2), 5),
         ),
-        camera_move_mentions=1 if "camera" in str(getattr(blueprint, "camera_plan", "")).lower() else 0,
+        camera_move_mentions=camera_move_mentions,
         class_names=["GeneratedScene"],
         line_count=len(scene_source.splitlines()),
     )
     return ValidationReport(valid=True, errors=[], warnings=[], profile=profile)
+
+
+def _can_accept_blueprint_compiler_quality(brief, validation, quality, min_quality: float) -> bool:
+    if float(quality.score) >= float(min_quality):
+        return True
+    near_miss_floor = max(float(min_quality) - 0.06, 0.54)
+    if float(quality.score) < near_miss_floor:
+        return False
+    if not _has_solid_compiler_motion_grammar(brief, validation):
+        return False
+    issues = list(quality.issues)
+    return not any(_is_severe_compiler_issue(issue) for issue in issues)
 
 
 def _can_soft_accept_quality(brief, validation, quality) -> bool:
@@ -1562,7 +1609,14 @@ class ManimRenderer(VisualRenderer):
                     compiler_attempt["quality"] = quality.to_dict()
                     compiler_attempt["quality_soft_accept"] = soft_accept
                     min_compiler_quality = _minimum_blueprint_compiler_quality(brief)
-                    if float(quality.score) >= min_compiler_quality:
+                    compiler_acceptable = _can_accept_blueprint_compiler_quality(
+                        brief,
+                        compiler_validation,
+                        quality,
+                        min_compiler_quality,
+                    )
+                    compiler_attempt["compiler_quality_accept"] = compiler_acceptable
+                    if compiler_acceptable:
                         chosen_scene_source = compiler_scene_source
                         chosen_quality = {**quality.to_dict(), "soft_accept": soft_accept}
                         chosen_blueprint = compiler_blueprint

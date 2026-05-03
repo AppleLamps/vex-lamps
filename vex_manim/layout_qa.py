@@ -44,17 +44,22 @@ class LayoutBox:
         return asdict(self)
 
     def bounds(self, *, prefer_text: bool = False) -> tuple[float, float, float, float]:
-        if prefer_text and None not in {
-            self.text_left,
-            self.text_right,
-            self.text_top,
-            self.text_bottom,
-        }:
+        text_left = self.text_left
+        text_right = self.text_right
+        text_top = self.text_top
+        text_bottom = self.text_bottom
+        if (
+            prefer_text
+            and text_left is not None
+            and text_right is not None
+            and text_top is not None
+            and text_bottom is not None
+        ):
             return (
-                float(self.text_left),
-                float(self.text_right),
-                float(self.text_top),
-                float(self.text_bottom),
+                float(text_left),
+                float(text_right),
+                float(text_top),
+                float(text_bottom),
             )
         return (self.left, self.right, self.top, self.bottom)
 
@@ -203,7 +208,7 @@ def analyze_layout_snapshot(snapshot: dict[str, Any], brief: SceneBrief) -> Layo
             issues.append(f"{box.name} extends outside the safe frame and may clip on screen.")
         if box.text_based and box.role in BOTTOM_SAFE_ROLES and box.bottom < safe_bottom - 0.02:
             issues.append(f"{box.name} falls into the bottom subtitle-safe region.")
-        min_font_size = 15.5 if box.role in {"metric", "label"} else 17.0
+        min_font_size = 15.0 if box.role in {"metric", "label", "hero"} else 17.0
         if box.text_based and box.font_size is not None and box.font_size < min_font_size:
             issues.append(f"{box.name} is using a very small font size ({box.font_size:.1f}px).")
         if box.text_based and box.width > frame_width * 0.88:
@@ -234,7 +239,11 @@ def analyze_layout_snapshot(snapshot: dict[str, Any], brief: SceneBrief) -> Layo
                 issues.append(f"{second.name} is colliding with {first.name}.")
 
     panel_count = sum(1 for box in boxes if box.role == "panel" or box.panel_like)
-    connector_count = sum(1 for box in boxes if box.connector_like)
+    connector_count = sum(
+        1
+        for box in boxes
+        if box.connector_like or box.role in {"connector", "diagram", "chart", "motion_spine"}
+    )
     text_count = sum(1 for box in boxes if box.text_based)
     unique_previews = {
         " ".join(box.text_preview.split()).strip()

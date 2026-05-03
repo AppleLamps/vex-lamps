@@ -3,8 +3,15 @@ from __future__ import annotations
 from google.genai import types
 
 import config
+from renderers.manim_renderer import (
+    _can_accept_blueprint_compiler_quality,
+    _compiler_validation_report,
+    _minimum_blueprint_compiler_quality,
+)
 from vex_manim.blueprint import build_scene_blueprints
 from vex_manim.briefs import build_scene_brief
+from vex_manim.layout_qa import LayoutReport, analyze_layout_snapshot
+from vex_manim.qa import PreviewReport, QualityReport
 from vex_manim.visual_ir import (
     build_storyboard_frames,
     build_visual_explanation_ir,
@@ -37,6 +44,90 @@ def test_gemini_config_keeps_thinking_disabled_only_for_gemma() -> None:
 
 
 def test_visual_ir_storyboard_uses_semantic_misconception_frame() -> None:
+    spec = _comparison_spec()
+    brief = build_scene_brief(spec, width=1920, height=1080, fps=30, latex_available=False)
+    blueprints = build_scene_blueprints(brief, limit=3)
+
+    ir = build_visual_explanation_ir(spec, brief, blueprints[0])
+    frames = build_storyboard_frames(ir, brief, blueprints[0])
+    critique = critique_storyboard(ir, frames, brief, blueprints[0])
+
+    assert ir.scene_type == "before_after_morph"
+    assert ir.misconception == "Tutorial binge"
+    assert ir.correct_model == "Build then study"
+    assert len(frames) == 3
+    assert critique.passed
+
+
+def test_layout_qa_counts_diagram_roles_as_motion_structure() -> None:
+    spec = _comparison_spec()
+    brief = build_scene_brief(spec, width=1920, height=1080, fps=30, latex_available=False)
+    snapshot = {
+        "frame": {"left": -7.11, "right": 7.11, "top": 4.0, "bottom": -4.0},
+        "safe_bounds": {"left": -6.54, "right": 6.54, "top": 3.6, "bottom": -2.64},
+        "registered_count": 4,
+        "registered": [
+            _box("panel_a", role="panel", left=-5.0, right=-3.7, top=1.5, bottom=0.2, panel_like=True),
+            _box("panel_b", role="panel", left=-1.0, right=0.3, top=1.5, bottom=0.2, panel_like=True),
+            _box("panel_c", role="panel", left=3.7, right=5.0, top=1.5, bottom=0.2, panel_like=True),
+            _box("motion_spine", role="diagram", left=-3.6, right=3.6, top=0.15, bottom=-0.15),
+        ],
+        "guardrail_actions": [],
+    }
+
+    report = analyze_layout_snapshot(snapshot, brief)
+
+    assert not any("instead of a clearer motion system" in issue for issue in report.issues)
+    assert not any("boxed editorial cards" in issue for issue in report.issues)
+
+
+def test_near_threshold_blueprint_compiler_quality_can_recover() -> None:
+    spec = _comparison_spec()
+    brief = build_scene_brief(spec, width=1920, height=1080, fps=30, latex_available=False)
+    blueprint = build_scene_blueprints(brief, limit=3)[0]
+    validation = _compiler_validation_report(brief, blueprint, "class GeneratedScene: pass")
+    min_quality = _minimum_blueprint_compiler_quality(brief)
+    quality = QualityReport(
+        passed=False,
+        score=min_quality - 0.032,
+        issues=["The composition still reads like boxed editorial cards rather than a bespoke animation."],
+        preview=PreviewReport(preview_video_path="", duration_sec=brief.duration_sec),
+        layout=LayoutReport(
+            passed=False,
+            score=min_quality - 0.152,
+            issues=["The composition still reads like boxed editorial cards rather than a bespoke animation."],
+            registered_count=4,
+            action_count=0,
+        ),
+    )
+
+    assert _can_accept_blueprint_compiler_quality(brief, validation, quality, min_quality)
+
+
+def test_near_threshold_blueprint_compiler_rejects_severe_layout() -> None:
+    spec = _comparison_spec()
+    brief = build_scene_brief(spec, width=1920, height=1080, fps=30, latex_available=False)
+    blueprint = build_scene_blueprints(brief, limit=3)[0]
+    validation = _compiler_validation_report(brief, blueprint, "class GeneratedScene: pass")
+    min_quality = _minimum_blueprint_compiler_quality(brief)
+    quality = QualityReport(
+        passed=False,
+        score=min_quality - 0.032,
+        issues=["comparison_after_state extends outside the safe frame and may clip on screen."],
+        preview=PreviewReport(preview_video_path="", duration_sec=brief.duration_sec),
+        layout=LayoutReport(
+            passed=False,
+            score=min_quality - 0.152,
+            issues=["comparison_after_state extends outside the safe frame and may clip on screen."],
+            registered_count=4,
+            action_count=0,
+        ),
+    )
+
+    assert not _can_accept_blueprint_compiler_quality(brief, validation, quality, min_quality)
+
+
+def _comparison_spec() -> dict:
     spec = {
         "visual_id": "visual_smoke",
         "template": "spotlight_compare",
@@ -62,15 +153,32 @@ def test_visual_ir_storyboard_uses_semantic_misconception_frame() -> None:
             "story_window": "Tutorials feel productive until a project exposes the missing skill.",
         },
     }
-    brief = build_scene_brief(spec, width=1920, height=1080, fps=30, latex_available=False)
-    blueprints = build_scene_blueprints(brief, limit=3)
+    return spec
 
-    ir = build_visual_explanation_ir(spec, brief, blueprints[0])
-    frames = build_storyboard_frames(ir, brief, blueprints[0])
-    critique = critique_storyboard(ir, frames, brief, blueprints[0])
 
-    assert ir.scene_type == "before_after_morph"
-    assert ir.misconception == "Tutorial binge"
-    assert ir.correct_model == "Build then study"
-    assert len(frames) == 3
-    assert critique.passed
+def _box(
+    name: str,
+    *,
+    role: str,
+    left: float,
+    right: float,
+    top: float,
+    bottom: float,
+    panel_like: bool = False,
+) -> dict:
+    return {
+        "name": name,
+        "role": role,
+        "class_name": "RoundedRectangle" if panel_like else "VMobject",
+        "left": left,
+        "right": right,
+        "top": top,
+        "bottom": bottom,
+        "width": right - left,
+        "height": top - bottom,
+        "center_x": (left + right) / 2,
+        "center_y": (top + bottom) / 2,
+        "text_based": False,
+        "panel_like": panel_like,
+        "connector_like": False,
+    }

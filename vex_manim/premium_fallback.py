@@ -268,28 +268,41 @@ def _comparison(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
     intro, develop, resolve, settle = _duration(spec, brief)
     title = _title(scene, spec)
     ir = _visual_ir(spec)
-    left_panel = scene.make_glass_panel(3.2, 2.25, stroke=scene.theme_color("panel_stroke"), fill=scene.theme_color("panel_fill"))
-    right_panel = scene.make_glass_panel(3.2, 2.25, stroke=scene.theme_color("accent"), fill=scene.theme_color("panel_fill"))
-    left_text = scene.fit_text(str(spec.get("left_detail") or ir.get("misconception") or "Before"), max_width=2.4, max_font_size=24, min_font_size=14, max_lines=3)
-    right_text = scene.fit_text(str(spec.get("right_detail") or ir.get("correct_model") or "After"), max_width=2.4, max_font_size=24, min_font_size=14, max_lines=3)
-    left_group = VGroup(left_panel, left_text.move_to(left_panel.get_center()))
-    right_group = VGroup(right_panel, right_text.move_to(right_panel.get_center()))
-    left_group.move_to(LEFT * 3.0 + DOWN * 0.1)
-    right_group.move_to(RIGHT * 3.0 + DOWN * 0.1)
-    bridge = scene.make_route_path(left_group.get_right() + RIGHT * 0.12, right_group.get_left() + LEFT * 0.12, bend=-0.12, color=scene.theme_color("accent_secondary"))
-    pulse = scene.make_glow_dot(color=scene.theme_color("accent")).move_to(left_group.get_right() + RIGHT * 0.12)
-    verdict = scene.make_metric_badge(str(spec.get("headline") or ir.get("claim") or "Upgrade"), label=str(spec.get("deck") or ir.get("proof_signal") or ""), width=3.1)
-    verdict.move_to(ORIGIN + DOWN * 2.1)
+    before_label = _compact_phrase(str(spec.get("left_detail") or ir.get("misconception") or "Before"), max_words=3, max_chars=22)
+    after_label = _compact_phrase(str(spec.get("right_detail") or ir.get("correct_model") or "After"), max_words=3, max_chars=22)
+    proof_label = _compact_phrase(str(spec.get("deck") or ir.get("proof_signal") or ""), max_words=5, max_chars=34)
+    left_group = scene.make_signal_node(before_label or "Before", radius=0.94, color=scene.theme_color("panel_stroke"))
+    right_group = scene.make_signal_node(after_label or "After", radius=1.12, color=scene.theme_color("accent"))
+    left_group.set_opacity(0.72)
+    left_group.move_to(LEFT * 3.45 + DOWN * 0.2)
+    right_group.move_to(RIGHT * 3.25 + DOWN * 0.05)
+    bridge = scene.make_route_path(
+        left_group.get_right() + RIGHT * 0.18,
+        right_group.get_left() + LEFT * 0.16,
+        bend=-0.2,
+        color=scene.theme_color("accent_secondary"),
+        stroke_width=5.0,
+    )
+    pulse = scene.make_glow_dot(radius=0.13, color=scene.theme_color("accent")).move_to(left_group.get_right() + RIGHT * 0.18)
+    ring = scene.make_orbit_ring(radius=1.28, color=scene.theme_color("accent"), opacity=0.22).move_to(right_group.get_center())
+    beam = scene.make_focus_beam(length=5.2, center=right_group.get_center() + DOWN * 0.08, color=scene.theme_color("glow"), opacity=0.12)
+    verdict = scene.make_metric_badge(str(spec.get("headline") or ir.get("claim") or "Upgrade"), label=proof_label, width=3.3)
+    verdict.move_to(ORIGIN + DOWN * 2.18)
 
-    scene.register_layout_group("comparison_left", left_group, role="hero")
-    scene.register_layout_group("comparison_right", right_group, role="hero")
-    scene.register_layout_group("comparison_bridge", VGroup(bridge, pulse), role="diagram")
+    scene.register_layout_group("comparison_before_state", left_group, role="hero")
+    scene.register_layout_group("comparison_after_state", right_group, role="hero")
+    scene.register_layout_group("comparison_motion_spine", VGroup(bridge, pulse, ring, beam), role="connector")
     scene.register_layout_group("comparison_verdict", verdict, role="support")
 
-    scene.play(FadeIn(title, shift=DOWN * 0.16), FadeIn(left_group, shift=RIGHT * 0.12), FadeIn(right_group, shift=LEFT * 0.12), run_time=intro)
-    scene.play(Create(bridge), run_time=develop * 0.4)
-    scene.play(MoveAlongPath(pulse, bridge), run_time=develop * 0.6)
-    scene.play(FadeTransform(left_text.copy(), right_text), scene.camera_focus(right_group, scale=0.9, run_time=resolve), FadeIn(verdict, shift=UP * 0.14), run_time=resolve)
+    scene.play(FadeIn(title, shift=DOWN * 0.16), FadeIn(beam), FadeIn(left_group, shift=RIGHT * 0.12), Create(bridge), run_time=intro)
+    scene.play(MoveAlongPath(pulse, bridge), FadeIn(ring, scale=1.04), run_time=develop)
+    scene.play(
+        FadeTransform(left_group.copy(), right_group),
+        left_group.animate.set_opacity(0.32).scale(0.9),
+        scene.camera_focus(right_group, scale=0.92, run_time=resolve),
+        FadeIn(verdict, shift=UP * 0.14),
+        run_time=resolve,
+    )
     scene.wait(settle)
 
 
