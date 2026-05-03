@@ -16,7 +16,6 @@ import typer
 from agent_trace import TraceEvent, render_trace_table, trace_status_style, truncate_trace_text
 from rich import box
 from rich.console import Console, Group
-from rich.live import Live
 from rich.panel import Panel
 from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.spinner import Spinner

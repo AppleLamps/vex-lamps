@@ -13,7 +13,6 @@ from pathlib import Path
 import httpx
 from google import genai
 from google.genai import errors as genai_errors
-from google.genai import types
 
 import config
 

@@ -21,10 +21,9 @@ from vex_manim.director import (
     write_generation_report,
 )
 from vex_manim.layout_qa import analyze_layout_snapshot, load_layout_snapshot
-from vex_manim.premium_fallback import run_premium_blueprint_scene
 from vex_manim.qa import analyze_preview, evaluate_generated_scene_quality, extract_preview_frames
 from vex_manim.scene_library import retrieve_scene_examples
-from vex_manim.validator import CodeProfile, ValidationReport, profile_scene_code, validate_generated_scene_code
+from vex_manim.validator import CodeProfile, ValidationReport, validate_generated_scene_code
 from vex_manim.visual_ir import (
     StoryboardCritique,
     StoryboardFrame,
@@ -1675,11 +1674,15 @@ class ManimRenderer(VisualRenderer):
                 _premium_blueprint_wrapper(final_spec, brief.to_dict(), chosen_blueprint.to_dict()),
                 encoding="utf-8",
             )
-        else:
+        elif chosen_candidate is not None:
             final_script_path.write_text(
                 _scene_wrapper(chosen_candidate.scene_code, final_spec, brief.to_dict()),
                 encoding="utf-8",
             )
+        elif chosen_scene_source:
+            final_script_path.write_text(chosen_scene_source, encoding="utf-8")
+        else:
+            raise VisualRendererError("No final Manim scene source was available after generation.")
         return final_script_path, metadata, artifact_paths
 
     def render(

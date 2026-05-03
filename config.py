@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 from pathlib import Path
+from typing import Any, cast
 
 from dotenv import load_dotenv
 from google.genai import types
@@ -39,14 +40,20 @@ def build_gemini_generation_config(
     model_name: str | None = None,
     tools: list[types.Tool] | None = None,
 ) -> types.GenerateContentConfig:
-    kwargs: dict[str, object] = {
-        "system_instruction": system_prompt,
-    }
-    if tools:
-        kwargs["tools"] = tools
+    automatic_function_calling = (
+        types.AutomaticFunctionCallingConfig(disable=True)
+        if tools
+        else None
+    )
+    thinking_config = None
     if gemini_supports_thinking_config(model_name):
-        kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
-    return types.GenerateContentConfig(**kwargs)
+        thinking_config = types.ThinkingConfig(thinking_budget=0)
+    return types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        tools=cast(Any, tools or None),
+        automatic_function_calling=automatic_function_calling,
+        thinking_config=thinking_config,
+    )
 
 
 def google_genai_http_options() -> types.HttpOptions:

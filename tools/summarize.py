@@ -6,7 +6,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from google import genai
-from google.genai import types
 
 import config
 from engine import VideoEngineError, extract_segments, probe_video

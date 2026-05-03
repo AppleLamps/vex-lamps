@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from prompts import TOOL_SCHEMAS
 from tools import (
     audio,
     auto_visuals,

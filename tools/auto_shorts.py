@@ -6,7 +6,6 @@ import shutil
 from pathlib import Path
 
 from google import genai
-from google.genai import types
 
 import config
 from engine import apply_center_punch_ins, VideoEngineError, merge, probe_video, render_vertical_short, trim

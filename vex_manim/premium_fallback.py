@@ -4,10 +4,8 @@ import re
 from typing import Any
 
 from manim import (
-    AnimationGroup,
     Axes,
     Create,
-    Dot,
     DOWN,
     FadeIn,
     FadeTransform,
@@ -38,9 +36,13 @@ def _visual_ir(spec: dict[str, Any]) -> dict[str, Any]:
     return dict(payload) if isinstance(payload, dict) else {}
 
 
+def _list_value(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, list) else []
+
+
 def _ir_copy_terms(spec: dict[str, Any], *, roles: set[str] | None = None, limit: int = 4) -> list[str]:
     ir = _visual_ir(spec)
-    objects = ir.get("objects") if isinstance(ir.get("objects"), list) else []
+    objects = _list_value(ir.get("objects"))
     terms: list[str] = []
     for item in objects:
         if not isinstance(item, dict):
@@ -48,7 +50,7 @@ def _ir_copy_terms(spec: dict[str, Any], *, roles: set[str] | None = None, limit
         role = str(item.get("role") or "")
         if roles and role not in roles:
             continue
-        for line in list(item.get("copy") or []):
+        for line in _list_value(item.get("copy")):
             compact = _compact_phrase(line, max_words=4, max_chars=28)
             if compact and compact.lower() not in {term.lower() for term in terms}:
                 terms.append(compact)
@@ -67,9 +69,9 @@ def _unique_terms(spec: dict[str, Any], *, limit: int = 4) -> list[str]:
     items: list[str] = []
     for candidate in [
         *_ir_copy_terms(spec, limit=limit),
-        *(spec.get("steps") or []),
-        *(spec.get("supporting_lines") or []),
-        *(spec.get("keywords") or []),
+        *_list_value(spec.get("steps")),
+        *_list_value(spec.get("supporting_lines")),
+        *_list_value(spec.get("keywords")),
         spec.get("left_detail"),
         spec.get("right_detail"),
         spec.get("deck"),
@@ -123,8 +125,8 @@ def _process_terms(spec: dict[str, Any], *, limit: int = 4) -> list[str]:
     terms: list[str] = []
     for candidate in [
         *_ir_copy_terms(spec, limit=limit),
-        *(spec.get("steps") or []),
-        *(spec.get("supporting_lines") or []),
+        *_list_value(spec.get("steps")),
+        *_list_value(spec.get("supporting_lines")),
         spec.get("headline"),
         spec.get("deck"),
         spec.get("sentence_text"),
@@ -166,8 +168,8 @@ def _metric_story(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
     ir = _visual_ir(spec)
     numbers = []
     evidence = ir.get("evidence") if isinstance(ir.get("evidence"), dict) else {}
-    if isinstance(evidence.get("numbers"), list):
-        numbers = [str(item) for item in evidence.get("numbers") if str(item).strip()]
+    if isinstance(evidence, dict):
+        numbers = [str(item) for item in _list_value(evidence.get("numbers")) if str(item).strip()]
     badge = scene.make_metric_badge(
         str(numbers[0] if numbers else spec.get("emphasis_text") or spec.get("headline") or ir.get("proof_signal") or "Key signal"),
         label=str(spec.get("deck") or ir.get("correct_model") or ""),

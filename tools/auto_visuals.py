@@ -7,7 +7,7 @@ from pathlib import Path
 import config
 from broll_intelligence import ensure_writable_dir, safe_stem, writable_dir_candidates
 from engine import VideoEngineError, apply_visual_overlays, probe_video
-from renderers import VisualRendererError, renderer_capabilities, resolve_renderer
+from renderers import RenderedAsset, VisualRendererError, renderer_capabilities, resolve_renderer
 from state import ProjectState, restrict_timed_items_to_available_ranges, utc_now_iso
 from tools.transcript import execute as transcribe
 from tools.transcript_utils import load_transcript_bundle
@@ -36,44 +36,15 @@ def _load_manifest(path: str) -> dict[str, object] | None:
         return None
 
 
-def _working_file_fingerprint(path: str) -> dict[str, object]:
-    target = Path(str(path))
-    stat = target.stat()
-    return {
-        "path": str(target.resolve()),
-        "size_bytes": int(stat.st_size),
-        "mtime_ns": int(stat.st_mtime_ns),
-    }
+def _as_list(value: object) -> list:
+    return list(value) if isinstance(value, list) else []
 
 
-def _scene_cut_cache_path(state: ProjectState) -> Path:
-    return Path(state.working_dir) / "scene_cuts.auto_visuals.json"
-
-
-def _detect_scene_cuts_cached(state: ProjectState) -> list[float]:
-    cache_path = _scene_cut_cache_path(state)
-    fingerprint = _working_file_fingerprint(state.working_file)
-    if cache_path.is_file():
-        try:
-            payload = json.loads(cache_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            payload = None
-        if isinstance(payload, dict) and payload.get("fingerprint") == fingerprint:
-            cached_cuts = payload.get("scene_cuts")
-            if isinstance(cached_cuts, list):
-                _emit_progress("Using cached scene cuts.")
-                return [round(float(item), 3) for item in cached_cuts]
-    scene_cuts = detect_scene_cuts(state.working_file)
-    payload = {
-        "created_at": utc_now_iso(),
-        "fingerprint": fingerprint,
-        "scene_cuts": scene_cuts,
-    }
+def _as_float(value, default: float = 0.0) -> float:
     try:
-        cache_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    except OSError:
-        pass
-    return scene_cuts
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _prior_auto_visual_card_ids(state: ProjectState) -> set[str]:
@@ -89,14 +60,14 @@ def _prior_auto_visual_card_ids(state: ProjectState) -> set[str]:
                 card_id = str(overlay.get("card_id") or "").strip()
                 if card_id:
                     card_ids.add(card_id)
-    history = list((state.artifacts or {}).get("auto_visuals_history") or [])
+    history = _as_list((state.artifacts or {}).get("auto_visuals_history"))
     for item in history:
         if not isinstance(item, dict):
             continue
         manifest = _load_manifest(str(item.get("manifest_path") or ""))
         if not manifest:
             continue
-        overlays = list(manifest.get("overlays") or [])
+        overlays = _as_list(manifest.get("overlays"))
         for overlay in overlays:
             if isinstance(overlay, dict):
                 card_id = str(overlay.get("card_id") or "").strip()
@@ -119,7 +90,7 @@ def _filter_previously_used_cards(
     for card in cards:
         normalized = dict(card)
         card_id = str(normalized.get("card_id") or "").strip()
-        original_priority = float(normalized.get("priority") or 0.0)
+        original_priority = _as_float(normalized.get("priority"), 0.0)
         recently_used = card_id in used_card_ids
         normalized["original_priority"] = original_priority
         normalized["recently_used"] = recently_used
@@ -134,8 +105,8 @@ def _filter_previously_used_cards(
         prepared,
         key=lambda item: (
             1 if not bool(item.get("recently_used")) else 0,
-            float(item.get("priority") or 0.0),
-            -float(item.get("start") or 0.0),
+            _as_float(item.get("priority"), 0.0),
+            -_as_float(item.get("start"), 0.0),
         ),
         reverse=True,
     )
@@ -233,7 +204,7 @@ def _render_generated_visual(
     width: int,
     height: int,
     fps: float,
-) -> tuple[object, str]:
+) -> tuple[RenderedAsset, str]:
     failures: list[str] = []
     attempted: set[str] = set()
     require_generated_scene = bool(spec.get("require_generated_scene"))
@@ -309,12 +280,12 @@ def execute(params: dict, state: ProjectState) -> dict:
         if clip_duration <= 0 or width <= 0 or height <= 0:
             raise RuntimeError("The current working video does not have valid timing or resolution metadata.")
 
-        transcript_segments = list(transcript_bundle.get("segments") or [])
-        transcript_words = list(transcript_bundle.get("words") or [])
-        sentence_segments = list(transcript_bundle.get("sentences") or [])
+        transcript_segments = _as_list(transcript_bundle.get("segments"))
+        transcript_words = _as_list(transcript_bundle.get("words"))
+        sentence_segments = _as_list(transcript_bundle.get("sentences"))
         blocked_ranges = state.overlay_ranges()
         _emit_progress("Detecting safe scene cuts...")
-        scene_cuts = _detect_scene_cuts_cached(state)
+        scene_cuts = detect_scene_cuts(state.working_file)
         _emit_progress("Building visual candidate cards from the transcript...")
         cards = build_visual_context_cards(
             sentence_segments,
@@ -384,7 +355,8 @@ def execute(params: dict, state: ProjectState) -> dict:
             )
             for spec in plan
         ]
-        render_results: list[tuple[int, dict[str, object], object, str] | tuple[int, str]] = []
+        render_successes: list[tuple[int, dict[str, object], RenderedAsset, str]] = []
+        render_errors: list[tuple[int, str]] = []
         worker_count = _max_render_workers(params, len(prepared_specs))
         _emit_progress(
             f"Rendering {len(prepared_specs)} generated visual{'s' if len(prepared_specs) != 1 else ''} with {worker_count} worker{'s' if worker_count != 1 else ''}..."
@@ -401,12 +373,12 @@ def execute(params: dict, state: ProjectState) -> dict:
                         height=height,
                         fps=fps,
                     )
-                    render_results.append((index, spec, asset, selection_reason))
+                    render_successes.append((index, spec, asset, selection_reason))
                 except VisualRendererError as exc:
                     _emit_progress(
                         f"Render failed for {spec.get('visual_id', f'visual_{index + 1:03d}')}: {exc}"
                     )
-                    render_results.append((index, str(exc)))
+                    render_errors.append((index, str(exc)))
         else:
             with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="vex-auto-visuals") as executor:
                 future_map = {
@@ -428,23 +400,21 @@ def execute(params: dict, state: ProjectState) -> dict:
                         _emit_progress(
                             f"Rendered {spec.get('visual_id', f'visual_{index + 1:03d}')} with {asset.renderer}."
                         )
-                        render_results.append((index, spec, asset, selection_reason))
+                        render_successes.append((index, spec, asset, selection_reason))
                     except VisualRendererError as exc:
                         _emit_progress(
                             f"Render failed for {spec.get('visual_id', f'visual_{index + 1:03d}')}: {exc}"
                         )
-                        render_results.append((index, str(exc)))
+                        render_errors.append((index, str(exc)))
 
-        for result in sorted(render_results, key=lambda item: item[0]):
-            if len(result) == 2:
-                _, failure = result
-                render_failures.append(str(failure))
-                continue
-            _, spec, asset, selection_reason = result
+        for _, failure in sorted(render_errors, key=lambda item: item[0]):
+            render_failures.append(str(failure))
+
+        for _, spec, asset, selection_reason in sorted(render_successes, key=lambda item: item[0]):
             applied_overlays.append(
                 {
-                    "start": float(spec["start"]),
-                    "end": float(spec["end"]),
+                    "start": _as_float(spec.get("start"), 0.0),
+                    "end": _as_float(spec.get("end"), 0.0),
                     "asset_path": asset.asset_path,
                     "compose_mode": spec["composition_mode"],
                     "position": spec["position"],

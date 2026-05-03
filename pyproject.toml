@@ -44,3 +44,15 @@ packages = ["presets", "providers", "renderers", "tools", "vex_manim"]
 
 [tool.setuptools.package-data]
 presets = ["*.json"]
+
+[tool.pytest.ini_options]
+norecursedirs = [
+  ".git",
+  ".analysis",
+  "build",
+  "dist",
+  "*.egg-info",
+  "__pycache__",
+  "vex_debug_*",
+  "vex_render_check*",
+]
