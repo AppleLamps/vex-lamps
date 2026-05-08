@@ -258,7 +258,15 @@ def detect_scene_cuts(
         "null",
         "-",
     ]
-    result = subprocess.run(command, capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=config.FFMPEG_COMMAND_TIMEOUT_SEC,
+        )
+    except subprocess.TimeoutExpired:
+        return []
     if result.returncode != 0:
         return []
     scene_cuts: list[float] = []

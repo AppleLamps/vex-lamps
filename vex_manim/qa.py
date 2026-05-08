@@ -100,7 +100,15 @@ def extract_preview_frames(
             "-y",
             str(target),
         ]
-        result = subprocess.run(command, capture_output=True, text=True)
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=config.FFMPEG_COMMAND_TIMEOUT_SEC,
+            )
+        except subprocess.TimeoutExpired:
+            continue
         if result.returncode == 0 and target.is_file():
             frame_paths.append(target)
     return frame_paths

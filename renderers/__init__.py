@@ -3,26 +3,29 @@ from __future__ import annotations
 from typing import Any
 
 from renderers.base import RenderedAsset, RendererStatus, VisualRenderer, VisualRendererError
-from renderers.blender_renderer import BlenderRenderer
-from renderers.ffmpeg_renderer import FFmpegRenderer
-from renderers.manim_renderer import ManimRenderer
 
-_RENDERERS: dict[str, VisualRenderer] = {
-    "manim": ManimRenderer(),
-    "ffmpeg": FFmpegRenderer(),
-    "blender": BlenderRenderer(),
+_RENDERERS: dict[str, VisualRenderer] = {}
+_RENDERER_MODULES = {
+    "manim": ("renderers.manim_renderer", "ManimRenderer"),
+    "ffmpeg": ("renderers.ffmpeg_renderer", "FFmpegRenderer"),
+    "blender": ("renderers.blender_renderer", "BlenderRenderer"),
 }
 
 
 def get_renderer(name: str) -> VisualRenderer:
     normalized = (name or "manim").strip().lower()
-    if normalized not in _RENDERERS:
+    if normalized not in _RENDERER_MODULES:
         raise VisualRendererError(f"Unsupported renderer: {name}")
+    if normalized not in _RENDERERS:
+        module_name, class_name = _RENDERER_MODULES[normalized]
+        module = __import__(module_name, fromlist=[class_name])
+        renderer_class = getattr(module, class_name)
+        _RENDERERS[normalized] = renderer_class()
     return _RENDERERS[normalized]
 
 
 def list_renderers() -> list[VisualRenderer]:
-    return list(_RENDERERS.values())
+    return [get_renderer(name) for name in _RENDERER_MODULES]
 
 
 def renderer_capabilities() -> list[dict[str, Any]]:

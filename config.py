@@ -4,6 +4,7 @@ import logging
 import os
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -25,8 +26,60 @@ GENAI_TIMEOUT_SEC = 90
 ANTHROPIC_TIMEOUT_SEC = 90.0
 MANIM_PREVIEW_TIMEOUT_SEC = 75
 MANIM_FINAL_TIMEOUT_SEC = 240
+FFMPEG_COMMAND_TIMEOUT_SEC = 900
+FFMPEG_EXPORT_TIMEOUT_SEC = 3600
+BLENDER_RENDER_TIMEOUT_SEC = 600
 LLM_REQUEST_MAX_RETRIES = 3
 LLM_RETRY_BASE_DELAY_SEC = 1.5
+
+
+@dataclass(frozen=True)
+class Settings:
+    provider: str = "gemini"
+    gemini_api_key: str | None = None
+    gemini_model: str = "gemma-4-31b-it"
+    anthropic_api_key: str | None = None
+    claude_model: str = "claude-sonnet-4-5"
+    pexels_api_key: str | None = None
+    agent_projects_dir: str = os.path.expanduser("~/.video-agent/projects/")
+    ffmpeg_path: str = "ffmpeg"
+    blender_path: str = "blender"
+    whisper_model: str = "base"
+    genai_timeout_sec: int = 90
+    anthropic_timeout_sec: float = 90.0
+    manim_preview_timeout_sec: int = 75
+    manim_final_timeout_sec: int = 240
+    ffmpeg_command_timeout_sec: int = 900
+    ffmpeg_export_timeout_sec: int = 3600
+    blender_render_timeout_sec: int = 600
+    llm_request_max_retries: int = 3
+    llm_retry_base_delay_sec: float = 1.5
+
+
+def load_settings_from_env() -> Settings:
+    load_dotenv()
+    manim_preview_timeout = max(30, int(os.getenv("MANIM_PREVIEW_TIMEOUT_SEC", "75")))
+    return Settings(
+        provider=os.getenv("PROVIDER", "gemini").strip().lower(),
+        gemini_api_key=os.getenv("GEMINI_API_KEY"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemma-4-31b-it"),
+        anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
+        claude_model=os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5"),
+        pexels_api_key=os.getenv("PEXELS_API_KEY"),
+        agent_projects_dir=os.path.expanduser(os.getenv("AGENT_PROJECTS_DIR", "~/.video-agent/projects/")),
+        ffmpeg_path=os.getenv("FFMPEG_PATH", "ffmpeg"),
+        blender_path=os.getenv("BLENDER_PATH", "blender"),
+        whisper_model=os.getenv("WHISPER_MODEL", "base"),
+        genai_timeout_sec=max(15, int(os.getenv("GENAI_TIMEOUT_SEC", "90"))),
+        anthropic_timeout_sec=max(15.0, float(os.getenv("ANTHROPIC_TIMEOUT_SEC", "90"))),
+        manim_preview_timeout_sec=manim_preview_timeout,
+        manim_final_timeout_sec=max(manim_preview_timeout, int(os.getenv("MANIM_FINAL_TIMEOUT_SEC", "240"))),
+        ffmpeg_command_timeout_sec=max(1, int(os.getenv("FFMPEG_COMMAND_TIMEOUT_SEC", "900"))),
+        ffmpeg_export_timeout_sec=max(1, int(os.getenv("FFMPEG_EXPORT_TIMEOUT_SEC", "3600"))),
+        blender_render_timeout_sec=max(1, int(os.getenv("BLENDER_RENDER_TIMEOUT_SEC", "600"))),
+        llm_request_max_retries=max(1, int(os.getenv("LLM_REQUEST_MAX_RETRIES", "3"))),
+        llm_retry_base_delay_sec=max(0.5, float(os.getenv("LLM_RETRY_BASE_DELAY_SEC", "1.5"))),
+    )
 
 
 def gemini_supports_thinking_config(model_name: str | None = None) -> bool:
@@ -93,8 +146,6 @@ def _ffmpeg_install_instructions() -> str:
 
 
 def reload_settings() -> None:
-    load_dotenv()
-
     global PROVIDER
     global GEMINI_API_KEY
     global GEMINI_MODEL
@@ -109,27 +160,32 @@ def reload_settings() -> None:
     global ANTHROPIC_TIMEOUT_SEC
     global MANIM_PREVIEW_TIMEOUT_SEC
     global MANIM_FINAL_TIMEOUT_SEC
+    global FFMPEG_COMMAND_TIMEOUT_SEC
+    global FFMPEG_EXPORT_TIMEOUT_SEC
+    global BLENDER_RENDER_TIMEOUT_SEC
     global LLM_REQUEST_MAX_RETRIES
     global LLM_RETRY_BASE_DELAY_SEC
 
-    PROVIDER = os.getenv("PROVIDER", "gemini").strip().lower()
-    GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-    GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemma-4-31b-it")
-    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-    CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
-    PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
-    AGENT_PROJECTS_DIR = os.path.expanduser(
-        os.getenv("AGENT_PROJECTS_DIR", "~/.video-agent/projects/")
-    )
-    FFMPEG_PATH = os.getenv("FFMPEG_PATH", "ffmpeg")
-    BLENDER_PATH = os.getenv("BLENDER_PATH", "blender")
-    WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
-    GENAI_TIMEOUT_SEC = max(15, int(os.getenv("GENAI_TIMEOUT_SEC", "90")))
-    ANTHROPIC_TIMEOUT_SEC = max(15.0, float(os.getenv("ANTHROPIC_TIMEOUT_SEC", "90")))
-    MANIM_PREVIEW_TIMEOUT_SEC = max(30, int(os.getenv("MANIM_PREVIEW_TIMEOUT_SEC", "75")))
-    MANIM_FINAL_TIMEOUT_SEC = max(MANIM_PREVIEW_TIMEOUT_SEC, int(os.getenv("MANIM_FINAL_TIMEOUT_SEC", "240")))
-    LLM_REQUEST_MAX_RETRIES = max(1, int(os.getenv("LLM_REQUEST_MAX_RETRIES", "3")))
-    LLM_RETRY_BASE_DELAY_SEC = max(0.5, float(os.getenv("LLM_RETRY_BASE_DELAY_SEC", "1.5")))
+    settings = load_settings_from_env()
+    PROVIDER = settings.provider
+    GEMINI_API_KEY = settings.gemini_api_key
+    GEMINI_MODEL = settings.gemini_model
+    ANTHROPIC_API_KEY = settings.anthropic_api_key
+    CLAUDE_MODEL = settings.claude_model
+    PEXELS_API_KEY = settings.pexels_api_key
+    AGENT_PROJECTS_DIR = settings.agent_projects_dir
+    FFMPEG_PATH = settings.ffmpeg_path
+    BLENDER_PATH = settings.blender_path
+    WHISPER_MODEL = settings.whisper_model
+    GENAI_TIMEOUT_SEC = settings.genai_timeout_sec
+    ANTHROPIC_TIMEOUT_SEC = settings.anthropic_timeout_sec
+    MANIM_PREVIEW_TIMEOUT_SEC = settings.manim_preview_timeout_sec
+    MANIM_FINAL_TIMEOUT_SEC = settings.manim_final_timeout_sec
+    FFMPEG_COMMAND_TIMEOUT_SEC = settings.ffmpeg_command_timeout_sec
+    FFMPEG_EXPORT_TIMEOUT_SEC = settings.ffmpeg_export_timeout_sec
+    BLENDER_RENDER_TIMEOUT_SEC = settings.blender_render_timeout_sec
+    LLM_REQUEST_MAX_RETRIES = settings.llm_request_max_retries
+    LLM_RETRY_BASE_DELAY_SEC = settings.llm_retry_base_delay_sec
 
 
 def validate_config() -> None:

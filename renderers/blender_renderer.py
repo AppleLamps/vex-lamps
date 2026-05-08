@@ -352,7 +352,17 @@ class BlenderRenderer(VisualRenderer):
             "-P",
             str(script_path),
         ]
-        result = subprocess.run(command, capture_output=True, text=True)
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=config.BLENDER_RENDER_TIMEOUT_SEC,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise VisualRendererError(
+                f"Blender renderer timed out for {spec_id} after {config.BLENDER_RENDER_TIMEOUT_SEC}s"
+            ) from exc
         if result.returncode != 0 or not output_path.is_file():
             stderr = (result.stderr or result.stdout or "").strip()
             raise VisualRendererError(f"Blender renderer failed for {spec_id}: {stderr}")

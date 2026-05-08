@@ -634,7 +634,17 @@ class FFmpegRenderer(VisualRenderer):
             "-y",
             str(output_path),
         ]
-        result = subprocess.run(command, capture_output=True, text=True)
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=config.FFMPEG_COMMAND_TIMEOUT_SEC,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise VisualRendererError(
+                f"FFmpeg renderer timed out for {spec_id} after {config.FFMPEG_COMMAND_TIMEOUT_SEC}s"
+            ) from exc
         if result.returncode != 0 or not output_path.is_file():
             stderr = (result.stderr or result.stdout or "").strip()
             raise VisualRendererError(f"FFmpeg renderer failed for {spec_id}: {stderr}")

@@ -137,6 +137,20 @@ cd vex
 pip install -e .
 ```
 
+Base install keeps optional Manim and Whisper packages out of the core environment. Add extras when you need those workflows:
+
+```bash
+pip install -e ".[manim]"
+pip install -e ".[transcription]"
+pip install -e ".[full]"
+```
+
+For local development, install the full toolchain and test tools:
+
+```bash
+pip install -e ".[full,dev]"
+```
+
 After install, you should be able to launch Vex with:
 
 ```bash
@@ -202,6 +216,9 @@ ANTHROPIC_API_KEY=your_key_here
 - `FFMPEG_PATH`
 - `BLENDER_PATH`
 - `WHISPER_MODEL`
+- `FFMPEG_COMMAND_TIMEOUT_SEC`
+- `FFMPEG_EXPORT_TIMEOUT_SEC`
+- `BLENDER_RENDER_TIMEOUT_SEC`
 
 ## Quick Start
 
@@ -510,6 +527,22 @@ Vex depends on FFmpeg for:
 ### Whisper is optional
 
 `transcribe_video` requires `openai-whisper` and a local environment capable of running it.
+
+Install it with:
+
+```bash
+pip install -e ".[transcription]"
+```
+
+### Manim is optional
+
+`add_auto_visuals` can use the FFmpeg renderer without Manim, but premium generated scenes require Manim.
+
+Install it with:
+
+```bash
+pip install -e ".[manim]"
+```
 
 ### Text overlays on Windows may require ImageMagick
 

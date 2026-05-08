@@ -20,13 +20,28 @@ dependencies = [
   "rich>=13.7.0",
   "ffmpeg-python>=0.2.0",
   "moviepy==1.0.3",
-  "manim>=0.20.0",
   "imageio>=2.9.0",
   "imageio-ffmpeg>=0.4.7",
   "python-dotenv>=1.0.0",
-  "openai-whisper>=20231117",
   "numpy>=1.24.0",
   "yt-dlp>=2025.1.0",
+]
+
+[project.optional-dependencies]
+manim = [
+  "manim>=0.20.0",
+]
+transcription = [
+  "openai-whisper>=20231117",
+]
+dev = [
+  "mypy>=1.14.0",
+  "pytest>=8.0.0",
+  "ruff>=0.8.0",
+]
+full = [
+  "manim>=0.20.0",
+  "openai-whisper>=20231117",
 ]
 
 [project.urls]
@@ -39,7 +54,7 @@ vex = "main:app"
 
 [tool.setuptools]
 include-package-data = true
-py-modules = ["main", "agent", "agent_trace", "broll_intelligence", "config", "engine", "prompts", "sources", "state", "visual_intelligence"]
+py-modules = ["main", "agent", "agent_trace", "broll_intelligence", "config", "engine", "prompts", "repl", "sources", "state", "ui", "visual_intelligence"]
 packages = ["presets", "providers", "renderers", "tools", "vex_manim"]
 
 [tool.setuptools.package-data]
@@ -56,3 +71,22 @@ norecursedirs = [
   "vex_debug_*",
   "vex_render_check*",
 ]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["F"]
+
+[tool.mypy]
+python_version = "3.11"
+files = [
+  "config.py",
+  "state.py",
+  "renderers/base.py",
+  "renderers/manim_quality.py",
+]
+ignore_missing_imports = true
+follow_imports = "silent"
+strict_optional = true

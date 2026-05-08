@@ -3,10 +3,10 @@ from __future__ import annotations
 from google.genai import types
 
 import config
-from renderers.manim_renderer import (
-    _can_accept_blueprint_compiler_quality,
-    _compiler_validation_report,
-    _minimum_blueprint_compiler_quality,
+from renderers.manim_quality import (
+    can_accept_blueprint_compiler_quality,
+    compiler_validation_report,
+    minimum_blueprint_compiler_quality,
 )
 from vex_manim.blueprint import build_scene_blueprints
 from vex_manim.briefs import build_scene_brief
@@ -85,8 +85,8 @@ def test_near_threshold_blueprint_compiler_quality_can_recover() -> None:
     spec = _comparison_spec()
     brief = build_scene_brief(spec, width=1920, height=1080, fps=30, latex_available=False)
     blueprint = build_scene_blueprints(brief, limit=3)[0]
-    validation = _compiler_validation_report(brief, blueprint, "class GeneratedScene: pass")
-    min_quality = _minimum_blueprint_compiler_quality(brief)
+    validation = compiler_validation_report(brief, blueprint, "class GeneratedScene: pass")
+    min_quality = minimum_blueprint_compiler_quality(brief)
     quality = QualityReport(
         passed=False,
         score=min_quality - 0.032,
@@ -101,15 +101,15 @@ def test_near_threshold_blueprint_compiler_quality_can_recover() -> None:
         ),
     )
 
-    assert _can_accept_blueprint_compiler_quality(brief, validation, quality, min_quality)
+    assert can_accept_blueprint_compiler_quality(brief, validation, quality, min_quality)
 
 
 def test_near_threshold_blueprint_compiler_rejects_severe_layout() -> None:
     spec = _comparison_spec()
     brief = build_scene_brief(spec, width=1920, height=1080, fps=30, latex_available=False)
     blueprint = build_scene_blueprints(brief, limit=3)[0]
-    validation = _compiler_validation_report(brief, blueprint, "class GeneratedScene: pass")
-    min_quality = _minimum_blueprint_compiler_quality(brief)
+    validation = compiler_validation_report(brief, blueprint, "class GeneratedScene: pass")
+    min_quality = minimum_blueprint_compiler_quality(brief)
     quality = QualityReport(
         passed=False,
         score=min_quality - 0.032,
@@ -124,7 +124,7 @@ def test_near_threshold_blueprint_compiler_rejects_severe_layout() -> None:
         ),
     )
 
-    assert not _can_accept_blueprint_compiler_quality(brief, validation, quality, min_quality)
+    assert not can_accept_blueprint_compiler_quality(brief, validation, quality, min_quality)
 
 
 def _comparison_spec() -> dict:
