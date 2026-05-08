@@ -22,8 +22,9 @@ def execute(params: dict, state: ProjectState) -> dict:
     all_paths = [state.working_file, *resolved]
     try:
         metadata = [probe_video(path) for path in all_paths]
-        mismatched = len({(item['width'], item['height']) for item in metadata}) > 1
-        output_path = merge(all_paths, state.working_dir)
+        mismatched = len({(item["width"], item["height"]) for item in metadata}) > 1
+        metadata_by_path = {path: item for path, item in zip(all_paths, metadata)}
+        output_path = merge(all_paths, state.working_dir, metadata_by_path=metadata_by_path)
         state.working_file = output_path
         state.metadata = probe_video(output_path)
         op = {

@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable
 
@@ -151,10 +152,16 @@ def trim(input_path: str, working_dir: str, start_sec: float, end_sec: float | N
     return output_path
 
 
-def _normalize_for_concat(input_path: str, working_dir: str, resolution: tuple[int, int], fps: float) -> str:
+def _normalize_for_concat(
+    input_path: str,
+    working_dir: str,
+    resolution: tuple[int, int],
+    fps: float,
+    metadata: dict | None = None,
+) -> str:
     width, height = resolution
     output_path = _unique_path(working_dir, ".mp4")
-    metadata = probe_video(input_path)
+    metadata = metadata or probe_video(input_path)
     input_stream = ffmpeg.input(input_path)
     video = input_stream.video.filter("scale", width, height, force_original_aspect_ratio="decrease")
     video = video.filter("pad", width, height, "(ow-iw)/2", "(oh-ih)/2", color="black")
@@ -176,18 +183,10 @@ def _normalize_for_concat(input_path: str, working_dir: str, resolution: tuple[i
     return output_path
 
 
-def merge(input_paths: list[str], working_dir: str) -> str:
-    if not input_paths:
-        raise VideoEngineError("At least one input path is required for merge.")
-    metadata = [probe_video(path) for path in input_paths]
-    target_resolution = (metadata[0]["width"], metadata[0]["height"])
-    target_fps = metadata[0]["fps"] or 30.0
-    normalized_files = [
-        _normalize_for_concat(path, working_dir, target_resolution, target_fps) for path in input_paths
-    ]
+def _concat_copy(input_paths: list[str], working_dir: str, message: str) -> str:
     concat_list = Path(_unique_path(working_dir, ".txt"))
     concat_list.write_text(
-        "\n".join(f"file '{Path(path).as_posix()}'" for path in normalized_files),
+        "\n".join(f"file '{Path(path).as_posix()}'" for path in input_paths),
         encoding="utf-8",
     )
     output_path = _unique_path(working_dir, ".mp4")
@@ -204,8 +203,66 @@ def merge(input_paths: list[str], working_dir: str) -> str:
         "-y",
         output_path,
     ]
-    _run_command(command, "Failed to merge clips")
+    _run_command(command, message)
     return output_path
+
+
+def _can_merge_without_normalization(metadata: list[dict]) -> bool:
+    if not metadata:
+        return False
+    first = metadata[0]
+    signature = (
+        first.get("width"),
+        first.get("height"),
+        round(float(first.get("fps") or 0.0), 3),
+        bool(first.get("has_audio")),
+        first.get("codec"),
+    )
+    return all(
+        (
+            item.get("width"),
+            item.get("height"),
+            round(float(item.get("fps") or 0.0), 3),
+            bool(item.get("has_audio")),
+            item.get("codec"),
+        )
+        == signature
+        for item in metadata[1:]
+    )
+
+
+def merge(input_paths: list[str], working_dir: str, metadata_by_path: dict[str, dict] | None = None) -> str:
+    if not input_paths:
+        raise VideoEngineError("At least one input path is required for merge.")
+    metadata_lookup = metadata_by_path or {}
+    metadata = [metadata_lookup.get(path) or probe_video(path) for path in input_paths]
+    if _can_merge_without_normalization(metadata):
+        try:
+            return _concat_copy(input_paths, working_dir, "Failed to merge clips")
+        except VideoEngineError:
+            LOGGER.debug("Direct concat copy failed; falling back to normalized merge.")
+    target_resolution = (metadata[0]["width"], metadata[0]["height"])
+    target_fps = metadata[0]["fps"] or 30.0
+    indexed_inputs = list(enumerate(input_paths))
+    max_workers = min(4, len(indexed_inputs))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        normalized_pairs = list(
+            executor.map(
+                lambda item: (
+                    item[0],
+                    _normalize_for_concat(
+                        item[1],
+                        working_dir,
+                        target_resolution,
+                        target_fps,
+                        metadata=metadata[item[0]],
+                    ),
+                ),
+                indexed_inputs,
+            )
+        )
+    normalized_files = [path for _, path in sorted(normalized_pairs, key=lambda pair: pair[0])]
+    return _concat_copy(normalized_files, working_dir, "Failed to merge clips")
 
 
 def extract_segments(
@@ -247,6 +304,7 @@ def adjust_speed(
     factor: float,
     segment_start: float | None,
     segment_end: float | None,
+    input_duration_sec: float | None = None,
 ) -> str:
     output_path = _unique_path(working_dir, ".mp4")
     if segment_start is None and segment_end is None:
@@ -271,7 +329,7 @@ def adjust_speed(
         return output_path
 
     start = segment_start or 0.0
-    end = segment_end if segment_end is not None else probe_video(input_path)["duration_sec"]
+    end = segment_end if segment_end is not None else (input_duration_sec or probe_video(input_path)["duration_sec"])
     filter_complex = (
         f"[0:v]split=3[v1][v2][v3];"
         f"[0:a]asplit=3[a1][a2][a3];"
