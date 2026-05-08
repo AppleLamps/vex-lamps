@@ -19,7 +19,14 @@ def execute(params: dict, state: ProjectState) -> dict:
     try:
         start_sec = parse_timestamp(params["start"]) if params.get("start") else None
         end_sec = parse_timestamp(params["end"]) if params.get("end") else None
-        output_path = adjust_speed(state.working_file, state.working_dir, factor, start_sec, end_sec)
+        output_path = adjust_speed(
+            state.working_file,
+            state.working_dir,
+            factor,
+            start_sec,
+            end_sec,
+            input_duration_sec=float((state.metadata or {}).get("duration_sec") or 0.0) or None,
+        )
         state.working_file = output_path
         state.metadata = probe_video(output_path)
         description = (
