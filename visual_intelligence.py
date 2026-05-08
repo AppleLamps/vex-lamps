@@ -1908,11 +1908,11 @@ def analyze_visual_plan_with_llm(
         "Do not create generic motivational cards. If a beat is vague or low-signal, skip it. "
         "Distill the copy. Do not simply repeat the spoken sentence as the headline. "
         "Use the evidence fields to decide when a full-screen replacement is safe versus when picture-in-picture is safer. "
-        "Return ONLY a JSON array with at most {count} objects using these keys: "
+        f"Return ONLY a JSON array with at most {max_visuals} objects using these keys: "
         "card_id, template, renderer_hint, style_pack, composition_mode, eyebrow, headline, deck, emphasis_text, supporting_lines, "
         "steps, keywords, quote_text, left_label, right_label, left_detail, right_detail, footer_text, position, scale, "
         "motion_preset, background_motif, layout_variant, rationale, confidence."
-    ).format(count=max_visuals)
+    )
     user_prompt = (
         f"Video duration: {clip_duration:.2f}s\n"
         f"Max visuals: {max_visuals}\n"

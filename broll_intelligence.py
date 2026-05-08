@@ -453,8 +453,8 @@ def analyze_broll_plan_with_llm(
         "You are a senior documentary editor designing stock B-roll insertions. "
         "Pick subtitle-anchored moments where the inserted footage should precisely reinforce the spoken line. "
         "Avoid generic nature or random office footage unless the line is truly abstract. "
-        "Return ONLY a JSON array of up to {count} objects with keys: card_id, visual_type, primary_query, backup_queries, must_include, avoid, direction, rationale, confidence."
-    ).format(count=max_overlays)
+        f"Return ONLY a JSON array of up to {max_overlays} objects with keys: card_id, visual_type, primary_query, backup_queries, must_include, avoid, direction, rationale, confidence."
+    )
     user_prompt = (
         f"Video duration: {clip_duration:.2f}s\n"
         f"Orientation target: {orientation}\n"

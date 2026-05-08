@@ -7,7 +7,6 @@ from typing import Any
 
 from vex_manim.briefs import SceneBrief
 
-
 TEXT_ROLES = {"title", "text", "label", "footer", "quote", "support", "metric"}
 IMMOVABLE_ROLES = {"panel", "background"}
 BOTTOM_SAFE_ROLES = {"title", "text", "label", "support", "quote"}

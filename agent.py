@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable
 import contextlib
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from agent_trace import TraceEvent, TraceRecorder, truncate_trace_text
 from prompts import TOOL_SCHEMAS, build_system_prompt

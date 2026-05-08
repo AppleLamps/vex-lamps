@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from tools import (
     audio,
-    auto_visuals,
     auto_shorts,
+    auto_visuals,
     export,
     info,
     merge,

@@ -7,7 +7,6 @@ from typing import Any
 
 from vex_manim.briefs import SceneBrief
 
-
 ALLOWED_IMPORT_PREFIXES = {
     "manim",
     "math",

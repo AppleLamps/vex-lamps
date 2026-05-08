@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from rich.console import Group
@@ -9,7 +9,7 @@ from rich.text import Text
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def truncate_trace_text(text: str, limit: int = 140) -> str:
@@ -42,7 +42,7 @@ class TraceEvent:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "TraceEvent":
+    def from_dict(cls, payload: dict[str, Any]) -> TraceEvent:
         return cls(
             step=int(payload.get("step", 0)),
             kind=str(payload.get("kind", "agent")),

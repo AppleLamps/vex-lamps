@@ -3,34 +3,31 @@ from __future__ import annotations
 import os
 import shutil
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
-from agent_trace import TraceEvent, render_trace_table
 from rich import box
 from rich.console import Console, Group
 from rich.panel import Panel
-from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 import config
 from agent import AgentLoopError, VideoAgent
-from engine import check_disk_space, estimate_output_size, export as export_media, probe_video
+from agent_trace import TraceEvent, render_trace_table
+from engine import probe_video
 from providers import get_provider
 from repl import (
-    detect_video_path,
-    find_project_for_source,
+    ReplHandlers,
+    direct_auto_broll,
+    direct_auto_shorts,
+    direct_auto_visuals,
+    direct_export,
     find_project_for_source_url,
-    format_loaded_state_message,
-    is_loaded_source,
-    is_loaded_source_url,
-    parse_load_source_command,
+    run_repl,
 )
-from sources import download_youtube_video, extract_youtube_url
+from sources import download_youtube_video
 from state import ProjectState, utc_now_iso
-from tools import TOOL_EXECUTORS
-from tools.export import load_presets
 from ui import run_agent_with_live_trace
 
 app = typer.Typer(help="Vex - AI-powered video editing agent.")
@@ -63,6 +60,16 @@ def create_provider(show_banner: bool = True):
     return provider
 
 
+def build_repl_handlers() -> ReplHandlers:
+    return ReplHandlers(
+        create_project=create_project,
+        create_project_from_youtube=create_project_from_youtube,
+        render_timeline=render_timeline,
+        render_trace_history=render_trace_history,
+        render_projects=render_projects,
+    )
+
+
 @app.callback(invoke_without_command=True)
 def app_callback(
     ctx: typer.Context,
@@ -80,7 +87,7 @@ def app_callback(
             console.print(
                 f"Resuming: [bold]{state.project_name}[/] (last edited {format_relative_time(state.updated_at)} ago)"
             )
-        run_repl(state, provider)
+        run_repl(state, provider, build_repl_handlers())
         raise typer.Exit()
 
 
@@ -99,8 +106,8 @@ def format_relative_time(iso_timestamp: str) -> str:
     except ValueError:
         return "unknown"
     if timestamp.tzinfo is None:
-        timestamp = timestamp.replace(tzinfo=timezone.utc)
-    delta = datetime.now(timezone.utc) - timestamp.astimezone(timezone.utc)
+        timestamp = timestamp.replace(tzinfo=UTC)
+    delta = datetime.now(UTC) - timestamp.astimezone(UTC)
     seconds = max(int(delta.total_seconds()), 0)
     if seconds < 60:
         return f"{seconds}s"
@@ -255,285 +262,6 @@ def render_trace_history(state: ProjectState) -> None:
     console.print(Panel(body, title="Latest Agent Trace", border_style="magenta"))
 
 
-def direct_export(state: ProjectState, preset_name: str, output: str | None = None) -> None:
-    presets = load_presets()
-    if preset_name not in presets:
-        raise typer.BadParameter(f"Unknown preset {preset_name!r}.")
-    preset = presets[preset_name]
-    if output:
-        output_path = os.path.abspath(output)
-    else:
-        suffix = preset.get("format") or "mp4"
-        stem = "".join(ch for ch in state.project_name.replace(" ", "_") if ch.isalnum() or ch in {"_", "-"})
-        output_path = os.path.join(state.output_dir, f"{stem}_{preset_name}.{suffix}")
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-    estimated = estimate_output_size(state.working_file, preset)
-    if not check_disk_space(output_path, estimated):
-        raise typer.BadParameter("Not enough free disk space for the requested export.")
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("{task.description}"),
-        BarColumn(),
-        TextColumn("{task.percentage:>3.0f}%"),
-        console=console,
-    )
-    with progress:
-        task = progress.add_task("Exporting...", total=100)
-
-        def on_progress(value: float) -> None:
-            progress.update(task, completed=value * 100)
-
-        export_media(state.working_file, output_path, preset, progress_callback=on_progress)
-    console.print(f"Saved: {output_path} ({format_bytes(os.path.getsize(output_path))})")
-
-
-def direct_auto_shorts(
-    state: ProjectState,
-    count: int,
-    min_duration_sec: float,
-    max_duration_sec: float,
-    target_platform: str,
-    include_compilation: bool,
-) -> None:
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("{task.description}"),
-        console=console,
-        transient=True,
-    )
-    with progress:
-        progress.add_task("Creating auto shorts...", total=None)
-        result = TOOL_EXECUTORS["create_auto_shorts"](
-            {
-                "count": count,
-                "min_duration_sec": min_duration_sec,
-                "max_duration_sec": max_duration_sec,
-                "target_platform": target_platform,
-                "include_compilation": include_compilation,
-            },
-            state,
-        )
-    if not result["success"]:
-        console.print(result["message"], style="red")
-        raise typer.Exit(code=1)
-    console.print(result["message"])
-
-
-def direct_auto_broll(
-    state: ProjectState,
-    max_overlays: int,
-    min_overlay_sec: float,
-    max_overlay_sec: float,
-) -> None:
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("{task.description}"),
-        console=console,
-        transient=True,
-    )
-    with progress:
-        progress.add_task("Adding auto B-roll...", total=None)
-        result = TOOL_EXECUTORS["add_auto_broll"](
-            {
-                "max_overlays": max_overlays,
-                "min_overlay_sec": min_overlay_sec,
-                "max_overlay_sec": max_overlay_sec,
-            },
-            state,
-        )
-    if not result["success"]:
-        console.print(result["message"], style="red")
-        raise typer.Exit(code=1)
-    console.print(result["message"])
-
-
-def direct_auto_visuals(
-    state: ProjectState,
-    mode: str,
-    renderer: str,
-    style_pack: str,
-    max_visuals: int,
-    min_visual_sec: float,
-    max_visual_sec: float,
-) -> None:
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("{task.description}"),
-        console=console,
-        transient=True,
-    )
-    with progress:
-        progress.add_task("Adding auto visuals...", total=None)
-        result = TOOL_EXECUTORS["add_auto_visuals"](
-            {
-                "mode": mode,
-                "renderer": renderer,
-                "style_pack": style_pack,
-                "max_visuals": max_visuals,
-                "min_visual_sec": min_visual_sec,
-                "max_visual_sec": max_visual_sec,
-            },
-            state,
-        )
-    if not result["success"]:
-        console.print(result["message"], style="red")
-        raise typer.Exit(code=1)
-    console.print(result["message"])
-
-
-def run_repl(state: ProjectState | None, provider) -> None:
-    agent = VideoAgent(state, provider) if state is not None else None
-    while True:
-        try:
-            user_input = console.input("[bold cyan]Vex > [/]")
-        except KeyboardInterrupt:
-            answer = console.input("\nSave and exit? [y/n] ").strip().lower()
-            if answer.startswith("y"):
-                if state is not None:
-                    state.save()
-                console.print("Project saved. Goodbye.")
-                return
-            continue
-        command = user_input.strip()
-        if not command:
-            continue
-        if command in {"/quit", "/exit"}:
-            if state is not None:
-                state.save()
-            console.print("Project saved. Goodbye.")
-            return
-        if command == "/help":
-            console.print(
-                "/status, /timeline, /trace, /undo, /redo, /export <preset>, /provider, /projects, /help, /quit"
-            )
-            continue
-        if command == "/status":
-            if state is None:
-                console.print("No video loaded. Drop a file path or YouTube link in your message to get started.")
-            else:
-                console.print(state.get_summary())
-            continue
-        if command == "/timeline":
-            if state is None:
-                console.print("No video loaded. Drop a file path or YouTube link in your message to get started.")
-            else:
-                render_timeline(state)
-            continue
-        if command == "/trace":
-            if state is None:
-                console.print("No video loaded. Drop a file path or YouTube link in your message to get started.")
-            else:
-                render_trace_history(state)
-            continue
-        if command == "/provider":
-            if state is None:
-                console.print(f"Active: {config.PROVIDER} / {provider.model_name}")
-            else:
-                console.print(f"Active: {state.provider} / {state.model}")
-            continue
-        if command == "/projects":
-            render_projects()
-            continue
-        if command == "/undo":
-            if state is None:
-                console.print("No video loaded. Drop a file path or YouTube link in your message to get started.")
-                continue
-            result = TOOL_EXECUTORS["undo"]({}, state)
-            state = result["updated_state"]
-            if agent is not None:
-                agent.state = state
-            console.print(result["message"])
-            continue
-        if command == "/redo":
-            if state is None:
-                console.print("No video loaded. Drop a file path or YouTube link in your message to get started.")
-                continue
-            result = TOOL_EXECUTORS["redo"]({}, state)
-            state = result["updated_state"]
-            if agent is not None:
-                agent.state = state
-            console.print(result["message"])
-            continue
-        if command.startswith("/export"):
-            if state is None:
-                console.print("No video loaded. Drop a file path or YouTube link in your message to get started.")
-                continue
-            parts = command.split(maxsplit=1)
-            if len(parts) != 2:
-                console.print("Usage: /export <preset>")
-                continue
-            direct_export(state, parts[1].strip())
-            continue
-
-        load_request = parse_load_source_command(command)
-        if load_request is not None:
-            load_kind, load_target = load_request
-            if load_kind == "path":
-                already_loaded = is_loaded_source(state, load_target)
-                if already_loaded and state is not None:
-                    console.print(format_loaded_state_message(state, already_loaded=True))
-                    continue
-                console.print(f"Loading: {Path(load_target).name}...")
-                state = find_project_for_source(load_target)
-                if state is None:
-                    state = create_project(load_target, None, config.PROVIDER, provider.model_name)
-                agent = VideoAgent(state, provider)
-                console.print(format_loaded_state_message(state, already_loaded=False))
-                continue
-            already_loaded = is_loaded_source_url(state, load_target)
-            if already_loaded and state is not None:
-                console.print(format_loaded_state_message(state, already_loaded=True))
-                continue
-            console.print("Fetching video from YouTube...")
-            state = find_project_for_source_url(load_target)
-            if state is None:
-                try:
-                    state = create_project_from_youtube(load_target, None, config.PROVIDER, provider.model_name)
-                except Exception as exc:
-                    console.print(f"Failed to download YouTube video: {exc}", style="red")
-                    continue
-            agent = VideoAgent(state, provider)
-            console.print(format_loaded_state_message(state, already_loaded=False))
-            continue
-
-        detected_path = detect_video_path(command)
-        detected_url = extract_youtube_url(command)
-        if detected_path and not is_loaded_source(state, detected_path):
-            console.print(f"Loading: {Path(detected_path).name}...")
-            state = find_project_for_source(detected_path)
-            if state is None:
-                state = create_project(detected_path, None, config.PROVIDER, provider.model_name)
-            agent = VideoAgent(state, provider)
-        elif detected_url and not is_loaded_source_url(state, detected_url):
-            console.print("Fetching video from YouTube...")
-            state = find_project_for_source_url(detected_url)
-            if state is None:
-                try:
-                    state = create_project_from_youtube(detected_url, None, config.PROVIDER, provider.model_name)
-                except Exception as exc:
-                    console.print(f"Failed to download YouTube video: {exc}", style="red")
-                    continue
-            agent = VideoAgent(state, provider)
-        elif state is None:
-            console.print("No video loaded. Drop a file path or YouTube link in your message to get started.")
-            continue
-
-        try:
-            response, _trace_events = run_agent_with_live_trace(agent, command)
-        except AgentLoopError as exc:
-            console.print(f"Agent error: {exc}", style="red")
-            continue
-        except Exception:
-            console.print_exception()
-            continue
-
-        state = agent.state
-        if response.message:
-            console.print(response.message)
-        for suggestion in response.suggestions:
-            console.print(Panel(suggestion, title="Suggestion", border_style="yellow"))
-
-
 @app.command()
 def start(video_path: str, name: str | None = typer.Option(default=None, help="Project name.")) -> None:
     provider = create_provider()
@@ -542,14 +270,14 @@ def start(video_path: str, name: str | None = typer.Option(default=None, help="P
         raise typer.BadParameter(f"Video file not found: {absolute_path}")
     state = create_project(absolute_path, name, config.PROVIDER, provider.model_name)
     print_project_panel(state)
-    run_repl(state, provider)
+    run_repl(state, provider, build_repl_handlers())
 
 
 @app.command()
 def repl(project: str | None = typer.Option(default=None, help="Project id.")) -> None:
     provider = create_provider()
     state = find_project(project)
-    run_repl(state, provider)
+    run_repl(state, provider, build_repl_handlers())
 
 
 @app.command()
@@ -564,10 +292,10 @@ def run(
         response, _trace_events = run_agent_with_live_trace(agent, instruction)
     except AgentLoopError as exc:
         console.print(f"Agent error: {exc}", style="red")
-        raise typer.Exit(code=1)
-    except Exception:
+        raise typer.Exit(code=1) from exc
+    except Exception as exc:
         console.print_exception()
-        raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from exc
     console.print(response.message)
     for suggestion in response.suggestions:
         console.print(Panel(suggestion, title="Suggestion", border_style="yellow"))

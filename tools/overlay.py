@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from engine import VideoEngineError, add_text, parse_timestamp, probe_video
 from state import ProjectState
@@ -58,7 +58,7 @@ def execute(params: dict, state: ProjectState) -> dict:
                 "color": params.get("color", "white"),
                 "background_opacity": float(params.get("background_opacity", 0.0)),
             },
-            "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "timestamp": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "result_file": output_path,
             "description": description,
         }

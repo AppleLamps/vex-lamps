@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
-import json
 import queue
 import re
 import shutil
@@ -11,9 +11,10 @@ import subprocess
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import ffmpeg
 from moviepy.editor import ColorClip, CompositeVideoClip, TextClip, VideoFileClip
@@ -747,11 +748,9 @@ def apply_visual_overlays(
         )
         if active_overlay is None:
             filter_parts.append(
-                (
-                    f"[0:v]trim={start_sec:.3f}:{end_sec:.3f},setpts=PTS-STARTPTS,"
-                    f"fps={math.ceil(fps)},scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                    f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v{index}]"
-                )
+                f"[0:v]trim={start_sec:.3f}:{end_sec:.3f},setpts=PTS-STARTPTS,"
+                f"fps={math.ceil(fps)},scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[v{index}]"
             )
         else:
             input_index = asset_indexes[str(active_overlay["asset_path"])]
@@ -763,27 +762,21 @@ def apply_visual_overlays(
                     margin,
                 )
                 filter_parts.append(
-                    (
-                        f"[0:v]trim={start_sec:.3f}:{end_sec:.3f},setpts=PTS-STARTPTS,"
-                        f"fps={math.ceil(fps)},scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[base{index}]"
-                    )
+                    f"[0:v]trim={start_sec:.3f}:{end_sec:.3f},setpts=PTS-STARTPTS,"
+                    f"fps={math.ceil(fps)},scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                    f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1[base{index}]"
                 )
                 filter_parts.append(
-                    (
-                        f"[{input_index}:v]trim=0:{segment_duration:.3f},setpts=PTS-STARTPTS,"
-                        f"fps={math.ceil(fps)},scale={pip_width}:-2:force_original_aspect_ratio=decrease,"
-                        f"setsar=1[ov{index}]"
-                    )
+                    f"[{input_index}:v]trim=0:{segment_duration:.3f},setpts=PTS-STARTPTS,"
+                    f"fps={math.ceil(fps)},scale={pip_width}:-2:force_original_aspect_ratio=decrease,"
+                    f"setsar=1[ov{index}]"
                 )
                 filter_parts.append(f"[base{index}][ov{index}]overlay={x_pos}:{y_pos}:shortest=1[v{index}]")
             else:
                 filter_parts.append(
-                    (
-                        f"[{input_index}:v]trim=0:{segment_duration:.3f},setpts=PTS-STARTPTS,"
-                        f"fps={math.ceil(fps)},scale={width}:{height}:force_original_aspect_ratio=increase,"
-                        f"crop={width}:{height},setsar=1[v{index}]"
-                    )
+                    f"[{input_index}:v]trim=0:{segment_duration:.3f},setpts=PTS-STARTPTS,"
+                    f"fps={math.ceil(fps)},scale={width}:{height}:force_original_aspect_ratio=increase,"
+                    f"crop={width}:{height},setsar=1[v{index}]"
                 )
         concat_inputs.append(f"[v{index}]")
 

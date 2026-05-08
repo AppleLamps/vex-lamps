@@ -1,5 +1,7 @@
 # Vex
 
+[![CI](https://github.com/AppleLamps/vex-lamps/actions/workflows/ci.yml/badge.svg)](https://github.com/AppleLamps/vex-lamps/actions/workflows/ci.yml)
+
 Vex is an open-source AI video editing agent for the terminal.
 
 You launch `vex`, talk to it in plain English, point at a video file, and it edits a safe working copy of your footage using FFmpeg, MoviePy, and an LLM-driven tool loop.
@@ -603,6 +605,30 @@ Make sure:
 ## Contributing
 
 Issues and PRs are welcome.
+
+### Developer setup
+
+Use the base development install when you only need the core app, linting, typing, and tests:
+
+```bash
+pip install -e ".[dev]"
+```
+
+Use the full development install when you also need Manim scenes and Whisper transcription:
+
+```bash
+pip install -e ".[full,dev]"
+```
+
+FFmpeg must be available on `PATH` for media tests and real editing workflows. Manim and Whisper are optional for the base install, but required for premium generated visuals and local transcription.
+
+Before opening a PR, run:
+
+```bash
+python -m pytest -q
+python -m ruff check .
+python -m mypy
+```
 
 If you report a bug, include:
 

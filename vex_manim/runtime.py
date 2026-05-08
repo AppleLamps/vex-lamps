@@ -7,32 +7,31 @@ from typing import Any
 
 import manim
 from manim import (
+    BOLD,
+    DOWN,
+    LEFT,
+    MEDIUM,
+    NORMAL,
+    ORIGIN,
+    RIGHT,
+    UP,
+    Animation,
     Arc,
     ArcBetweenPoints,
-    Animation,
-    BOLD,
     Circle,
     CurvedArrow,
     DashedLine,
     Dot,
-    DOWN,
     FadeIn,
-    LEFT,
     Line,
     ManimColor,
-    MEDIUM,
     MovingCameraScene,
-    NORMAL,
-    ORIGIN,
     Rectangle,
-    RIGHT,
     RoundedRectangle,
     Text,
-    UP,
     VGroup,
     VMobject,
 )
-
 
 CENTER = ORIGIN
 utils = manim.rate_functions
@@ -767,7 +766,7 @@ class VexGeneratedScene(MovingCameraScene):
         phase: float = 0.0,
     ) -> Any:
         anchor = mob.get_center().copy()
-        setattr(mob, "_vex_drift_t", 0.0)
+        mob._vex_drift_t = 0.0
 
         def updater(target: Any, dt: float) -> None:
             target._vex_drift_t = getattr(target, "_vex_drift_t", 0.0) + dt * speed
@@ -788,7 +787,7 @@ class VexGeneratedScene(MovingCameraScene):
     ) -> Any:
         base_fill = float(mob.get_fill_opacity()) if hasattr(mob, "get_fill_opacity") else 0.0
         base_stroke = float(mob.get_stroke_opacity()) if hasattr(mob, "get_stroke_opacity") else 0.0
-        setattr(mob, "_vex_pulse_t", 0.0)
+        mob._vex_pulse_t = 0.0
 
         def updater(target: Any, dt: float) -> None:
             target._vex_pulse_t = getattr(target, "_vex_pulse_t", 0.0) + dt * speed

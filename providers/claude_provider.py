@@ -5,7 +5,7 @@ import time
 from typing import Any
 
 import httpx
-from anthropic import APIConnectionError, APIStatusError, Anthropic, InternalServerError, RateLimitError
+from anthropic import Anthropic, APIConnectionError, APIStatusError, InternalServerError, RateLimitError
 
 import config
 from providers.base import BaseLLMProvider, LLMResponse, ProviderRequestError, ToolCall

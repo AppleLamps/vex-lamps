@@ -4,19 +4,19 @@ import re
 from typing import Any
 
 from manim import (
+    DOWN,
+    LEFT,
+    ORIGIN,
+    RIGHT,
+    UP,
     Axes,
     Create,
-    DOWN,
     FadeIn,
     FadeTransform,
     LaggedStart,
-    LEFT,
     Line,
     MoveAlongPath,
-    ORIGIN,
-    RIGHT,
     Succession,
-    UP,
     VGroup,
     VMobject,
 )
@@ -319,7 +319,7 @@ def _timeline(scene, spec: dict[str, Any], brief: dict[str, Any]) -> None:
     route = scene.make_route_path(points=anchors, color=scene.theme_color("accent_secondary"))
     nodes = VGroup()
     labels = VGroup()
-    for index, (anchor, term) in enumerate(zip(anchors, terms), start=1):
+    for index, (anchor, term) in enumerate(zip(anchors, terms, strict=False), start=1):
         node = scene.make_signal_node("", number=index, radius=0.38, color=scene.theme_color("panel_stroke"))
         node.move_to(anchor)
         label_direction = UP

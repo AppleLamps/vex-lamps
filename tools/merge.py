@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from engine import VideoEngineError, merge, probe_video
 from state import ProjectState
@@ -23,14 +23,14 @@ def execute(params: dict, state: ProjectState) -> dict:
     try:
         metadata = [probe_video(path) for path in all_paths]
         mismatched = len({(item["width"], item["height"]) for item in metadata}) > 1
-        metadata_by_path = {path: item for path, item in zip(all_paths, metadata)}
+        metadata_by_path = {path: item for path, item in zip(all_paths, metadata, strict=False)}
         output_path = merge(all_paths, state.working_dir, metadata_by_path=metadata_by_path)
         state.working_file = output_path
         state.metadata = probe_video(output_path)
         op = {
             "op": "merge_clips",
             "params": {"file_paths": ["__CURRENT__", *resolved]},
-            "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "timestamp": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "result_file": output_path,
             "description": f"Merged {len(all_paths)} clips",
         }

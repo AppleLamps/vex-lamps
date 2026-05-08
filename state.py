@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import warnings
 from dataclasses import asdict, dataclass, field, fields
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +11,7 @@ import config
 
 
 def utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
 def merge_time_ranges(
@@ -128,7 +128,7 @@ class ProjectState:
         self.state_path.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
 
     @classmethod
-    def from_dict(cls, payload: dict[str, Any]) -> "ProjectState":
+    def from_dict(cls, payload: dict[str, Any]) -> ProjectState:
         valid_fields = {field_.name for field_ in fields(cls)}
         filtered = {key: value for key, value in payload.items() if key in valid_fields}
         return cls(**filtered)
@@ -178,7 +178,7 @@ class ProjectState:
         return payload
 
     @classmethod
-    def load(cls, project_id: str) -> "ProjectState":
+    def load(cls, project_id: str) -> ProjectState:
         base = Path(config.AGENT_PROJECTS_DIR)
         candidates = list(base.glob(f"*/{project_id}.json"))
         if not candidates:

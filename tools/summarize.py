@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from google import genai
@@ -193,7 +193,7 @@ def execute(params: dict, state: ProjectState) -> dict:
                 "target_duration_sec": target_duration_sec,
                 "segments": merged_segments,
             },
-            "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "timestamp": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "result_file": output_path,
             "description": description,
         }

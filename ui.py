@@ -8,14 +8,15 @@ import threading
 import time
 from collections import deque
 
-from agent import AgentLoopError, VideoAgent
-from agent_trace import TraceEvent, trace_status_style, truncate_trace_text
 from rich import box
 from rich.console import Group
 from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
+
+from agent import AgentLoopError, VideoAgent
+from agent_trace import TraceEvent, trace_status_style, truncate_trace_text
 
 ANSI_ESCAPE_RE = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 PROGRESS_HINT_RE = re.compile(r"(%\||frames/s|it/s|\bETA\b|\b\d+/\d+\b)", re.IGNORECASE)

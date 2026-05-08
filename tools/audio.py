@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from engine import (
     VideoEngineError,
@@ -70,7 +70,7 @@ def execute_replace(params: dict, state: ProjectState) -> dict:
                 "mix_with_original": bool(params.get("mix_with_original", False)),
                 "mix_ratio": float(params.get("mix_ratio", 0.5)),
             },
-            "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "timestamp": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "result_file": output_path,
             "description": description,
         }
@@ -108,7 +108,7 @@ def execute_mute(params: dict, state: ProjectState) -> dict:
                 "start_label": params["start"],
                 "end_label": params["end"],
             },
-            "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "timestamp": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "result_file": output_path,
             "description": description,
         }

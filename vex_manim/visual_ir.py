@@ -7,7 +7,6 @@ from typing import Any
 from vex_manim.blueprint import SceneBlueprint
 from vex_manim.briefs import SceneBrief
 
-
 _STOPWORDS = {
     "a",
     "an",

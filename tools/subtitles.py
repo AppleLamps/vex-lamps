@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from engine import VideoEngineError, burn_subtitles, probe_video
@@ -53,7 +53,7 @@ def execute(params: dict, state: ProjectState) -> dict:
                 "outline_color": outline_color,
                 "position": position,
             },
-            "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "timestamp": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "result_file": output_path,
             "description": description,
         }

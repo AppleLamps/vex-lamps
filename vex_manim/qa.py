@@ -137,7 +137,7 @@ def analyze_preview(
     if len(frame_paths) >= 2:
         frames = [iio.imread(path).astype(np.float32) / 255.0 for path in frame_paths if path.is_file()]
         deltas: list[float] = []
-        for first, second in zip(frames, frames[1:]):
+        for first, second in zip(frames, frames[1:], strict=False):
             deltas.append(float(np.mean(np.abs(first[..., :3] - second[..., :3]))))
         motion_delta = round(sum(deltas) / max(len(deltas), 1), 5)
     return PreviewReport(

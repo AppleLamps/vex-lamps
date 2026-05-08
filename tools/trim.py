@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from engine import VideoEngineError, parse_timestamp, probe_video, trim
 from state import ProjectState
@@ -21,7 +21,7 @@ def execute(params: dict, state: ProjectState) -> dict:
         op = {
             "op": "trim_clip",
             "params": {"start": start_sec, "end": end_sec, "start_label": params["start"], "end_label": params.get("end")},
-            "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "timestamp": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "result_file": output_path,
             "description": description,
         }

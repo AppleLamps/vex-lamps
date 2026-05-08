@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from engine import VideoEngineError, probe_video, trim_silence
 from state import ProjectState
@@ -58,7 +58,7 @@ def execute(params: dict, state: ProjectState) -> dict:
                 "min_keep_duration_ms": min_keep_duration_ms,
                 "trim_edges": trim_edges,
             },
-            "timestamp": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "timestamp": datetime.now(UTC).replace(microsecond=0).isoformat(),
             "result_file": output_path,
             "description": description,
         }

@@ -39,7 +39,6 @@ from vex_manim.visual_ir import (
     storyboard_prompt_block,
 )
 
-
 MAX_GENERATION_ATTEMPTS = 2
 _LATEX_RUNTIME_READY_CACHE: bool | None = None
 PREMIUM_GENERATED_TEMPLATES = {

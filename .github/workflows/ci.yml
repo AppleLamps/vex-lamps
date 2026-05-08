@@ -40,3 +40,38 @@ jobs:
 
       - name: Run tests
         run: python -m pytest -q
+
+  install-check:
+    name: Clean install checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system media dependencies
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg libcairo2-dev libpango1.0-dev pkg-config
+
+      - name: Verify base install
+        run: |
+          python -m venv .venv-base-check
+          . .venv-base-check/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -c "import importlib.util; import main, repl, ui; assert importlib.util.find_spec('manim') is None; assert importlib.util.find_spec('whisper') is None"
+          vex --version
+
+      - name: Verify full development install
+        run: |
+          python -m venv .venv-full-check
+          . .venv-full-check/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[full,dev]"
+          python -m pytest -q
+          python -m ruff check .
+          python -m mypy

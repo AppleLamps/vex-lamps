@@ -3,7 +3,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-
 SCENE_FAMILY_BY_TEMPLATE = {
     "data_journey": "metric_story",
     "signal_network": "system_map",
