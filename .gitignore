@@ -35,6 +35,7 @@ pip-wheel-metadata/
 .eggs/
 
 # Editor and OS files
+.cursor/
 .vscode/
 .idea/
 .DS_Store
@@ -50,6 +51,22 @@ vex_render_check*/
 # Optional local Vex runtime state if redirected into the repo
 .video-agent/
 .tmp-state/
+projects/
+outputs/
+exports/
+uploads/
+
+# Local media and generated deliverables
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.m4v
+*.flv
+*.mp3
+*.wav
+*.aac
 
 bugs.md
 instructions.md
