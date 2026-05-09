@@ -18,6 +18,7 @@ from engine import (
     merge,
     mute_segment,
     probe_video,
+    remove_segment,
     replace_audio,
     trim,
     trim_silence,
@@ -138,6 +139,8 @@ def rebuild_timeline(
         name = op["op"]
         if name == "trim_clip":
             current_path = trim(current_path, state.working_dir, params["start"], params.get("end"))
+        elif name == "remove_segment":
+            current_path = remove_segment(current_path, state.working_dir, params["start"], params["end"])
         elif name == "merge_clips":
             paths = []
             for item in params.get("file_paths", []):

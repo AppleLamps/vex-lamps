@@ -2,32 +2,201 @@
 
 [![CI](https://github.com/AppleLamps/vex-lamps/actions/workflows/ci.yml/badge.svg)](https://github.com/AppleLamps/vex-lamps/actions/workflows/ci.yml)
 
-Vex is an open-source AI video editing agent for the terminal.
+Vex is a local AI video editing workspace with both a browser UI and a terminal workflow.
 
-You launch `vex`, talk to it in plain English, point at a video file, and it edits a safe working copy of your footage using FFmpeg, MoviePy, and an LLM-driven tool loop.
+You load a video, talk to Vex in plain English, watch the agent run real editing tools, preview the current cut, and export a finished file. Vex keeps the original footage untouched and edits a project working copy with FFmpeg, MoviePy, and provider-backed tool calling.
 
-It is built for people who want the speed of CLI workflows without giving up conversational editing, transcript-aware automation, or custom generated visuals.
+## Highlights
 
-## Why Vex
+- Local browser app with upload, preview, chat, live command status, export, and download
+- CLI and REPL for fast terminal workflows
+- Stateful projects stored under `AGENT_PROJECTS_DIR`
+- Safe working-copy editing, timeline history, undo, and redo
+- Real video operations: trim, remove middle segments, speed changes, fades, overlays, audio edits, silence cleanup, subtitles, B-roll, generated visuals, and exports
+- Gemini by default, Claude when selected
+- Gemini video transcription for short clips, with Whisper available as an optional local fallback
+- Collapsed tool-call progress in the web chat, with full errors expandable inline
+- Tips & Tricks page in the web app that lists common agent capabilities and prompt examples
 
-- Natural language first: tell Vex what you want instead of memorizing editing syntax
-- Zero-setup interaction: type `vex` and start talking
-- Original footage stays untouched: edits always happen on a project working copy
-- Stateful projects: resume later with timeline history intact
-- Real editing tools: trims, overlays, audio edits, subtitle burn-in, silence cleanup, exports, and more
-- Transcript-aware auto visuals: Vex can plan custom explanatory inserts from the narration, generate them with Manim, and composite them back into the cut
-- Multi-provider ready: Gemini by default, Claude when you explicitly choose it
-- Live run status: see a moving spinner, the active tool name, and optional trace artifacts while the agent works
-- Terminal-native: fast, scriptable, and easy to integrate into your workflow
+## Quick Start: Web App
+
+Install Vex, configure `.env`, then run:
+
+```bash
+vex web
+```
+
+The local app opens at:
+
+```text
+http://127.0.0.1:8765
+```
+
+Useful options:
+
+```bash
+vex web --port 8766
+vex web --project <project-id>
+vex web --no-open
+```
+
+Web workflow:
+
+1. Click `Attach video` or drop a video on the empty state.
+2. Preview the loaded video at the top of the chat.
+3. Ask for an edit, transcript, short, visual pass, or export.
+4. Watch the compact command status update while tools run.
+5. Expand command details only when you need to read the trace or a full error.
+6. Click `Export` on the video, then download the current file or latest export.
+
+Supported uploads:
+
+```text
+.mp4 .mov .avi .mkv .webm .m4v .flv
+```
+
+The upload limit defaults to 4 GB and can be changed with `VEX_WEB_MAX_UPLOAD_MB`.
+
+## Quick Start: Terminal
+
+```bash
+vex
+```
+
+Then type a normal sentence with a video path:
+
+```text
+Vex > trim the first 30 seconds of "D:\videos\clip.mp4"
+```
+
+Continue naturally:
+
+```text
+Vex > remove the silent pauses
+Vex > add subtitles
+Vex > export it for youtube
+Vex > /quit
+```
+
+If no project is loaded, include a video path or YouTube URL in your first message. Vex creates or reuses the project automatically.
+
+## Installation
+
+### Requirements
+
+- Python 3.11+
+- FFmpeg installed and available on `PATH`
+- `yt-dlp` through the Python environment for YouTube loading
+- A Gemini API key or Anthropic API key
+- Manim optional for premium generated visuals
+- Blender optional for cinematic generated visuals
+- Whisper optional for local transcription fallback
+
+FFmpeg install:
+
+- macOS: `brew install ffmpeg`
+- Ubuntu/Debian: `sudo apt install ffmpeg`
+- Windows: install from `https://ffmpeg.org/download.html` and add `ffmpeg/bin` to `PATH`
+
+### Install Vex
+
+```bash
+git clone https://github.com/AppleLamps/vex-lamps.git
+cd vex-lamps
+pip install -e .
+```
+
+Optional extras:
+
+```bash
+pip install -e ".[manim]"
+pip install -e ".[transcription]"
+pip install -e ".[full]"
+```
+
+Development install:
+
+```bash
+pip install -e ".[full,dev]"
+```
+
+After install:
+
+```bash
+vex --version
+vex web
+```
+
+### Windows PATH Note
+
+If `vex` is not recognized after install, add your Python Scripts directory to `PATH`, then restart the terminal.
+
+Example:
+
+```text
+C:\Users\<you>\AppData\Roaming\Python\Python311\Scripts
+```
+
+## Configuration
+
+Copy the environment example:
+
+```bash
+cp .env.example .env
+```
+
+PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Default Gemini setup:
+
+```env
+PROVIDER=gemini
+GEMINI_API_KEY=your_google_ai_studio_key_here
+GEMINI_MODEL=gemma-4-31b-it
+```
+
+Claude setup:
+
+```env
+PROVIDER=claude
+ANTHROPIC_API_KEY=your_anthropic_key_here
+CLAUDE_MODEL=claude-sonnet-4-5
+```
+
+Important settings:
+
+| Setting | Purpose |
+|---|---|
+| `PROVIDER` | `gemini` or `claude` |
+| `GEMINI_API_KEY` | Google AI Studio key |
+| `GEMINI_MODEL` | Gemini model used for planning and tool calling |
+| `ANTHROPIC_API_KEY` | Anthropic key |
+| `CLAUDE_MODEL` | Claude model used when `PROVIDER=claude` |
+| `PEXELS_API_KEY` | Enables stock B-roll search |
+| `AGENT_PROJECTS_DIR` | Project storage directory |
+| `FFMPEG_PATH` | FFmpeg executable path |
+| `BLENDER_PATH` | Blender executable path |
+| `WHISPER_MODEL` | Whisper model for local fallback transcription |
+| `GEMINI_TRANSCRIPT_MAX_INLINE_MB` | Max video size for Gemini inline transcription |
+| `GEMINI_TRANSCRIPT_MAX_INLINE_DURATION_SEC` | Max video duration for Gemini inline transcription |
+| `VEX_WEB_MAX_UPLOAD_MB` | Web upload limit |
+| `GENAI_TIMEOUT_SEC` | Gemini request timeout |
+| `ANTHROPIC_TIMEOUT_SEC` | Claude request timeout |
+| `LLM_REQUEST_MAX_RETRIES` | Provider retry count |
 
 ## What Vex Can Do
 
-### Core editing
+### Core Editing
 
 - Inspect video metadata
 - Trim clips by timestamp
+- Remove a middle segment while keeping the surrounding footage
 - Merge multiple clips
-- Adjust playback speed for a full clip or a selected segment
+- Adjust playback speed for a full clip or selected segment
 - Add fade in, fade out, and fade-through-black transitions
 - Add timed text overlays
 - Remove silent gaps from raw footage
@@ -40,413 +209,98 @@ It is built for people who want the speed of CLI workflows without giving up con
 - Mix external audio with original audio
 - Mute a selected time range
 
-### Captions and transcript workflows
+### Captions and Transcripts
 
-- Transcribe video locally with Whisper
+- Transcribe short videos through Gemini video input when using Gemini
+- Fall back to local Whisper when selected or required
 - Generate `transcript.txt` and `transcript.srt`
-- Burn subtitles directly into the video from an SRT file
-- Auto-summarize long clips into highlight cuts using transcript-aware segment selection
-- Auto-create multiple vertical shorts with captions, ranking, hooks, metadata, and a bundle manifest
-- Score each generated short with explainable viral factors
-- Generate timestamped B-roll suggestions for each short
-- Fetch and splice subtitle-aligned, transcript-aware stock B-roll from Pexels into the working video
-- Generate transcript-aligned custom visuals and animations with Manim for precise explanatory inserts
-- Add transcript-driven punch-in moments for emphasis inside generated shorts
+- Burn subtitles directly into the video
+- Summarize long clips into highlight cuts using transcript-aware segment selection
+- Create multiple vertical shorts with captions, ranking, hooks, metadata, and a manifest bundle
 
-## What's New: Auto Visuals
+### B-Roll and Generated Visuals
 
-`add_auto_visuals` is the biggest recent addition to Vex.
+- Generate timestamped B-roll suggestions
+- Fetch and splice transcript-aware stock B-roll from Pexels
+- Generate transcript-aligned visuals and animations with Manim
+- Use FFmpeg-rendered editorial cards when Manim is unavailable
+- Use Blender for optional cinematic generated shots when installed
 
-Instead of only fetching stock footage, Vex can now:
-
-- transcribe a talking-head or explainer video
-- score which spoken beats deserve a custom visual
-- plan where a full-screen replacement is safe versus where picture-in-picture is smarter
-- generate transcript-aligned custom visuals with Manim
-- validate and preview those scenes before the final composite
-- fall back to simpler renderers only when a premium generated scene is not worth shipping
-
-The current renderer stack is:
-
-- `manim` for premium explainer visuals, process diagrams, comparisons, timelines, and data-driven scenes
-- `ffmpeg` for fast editorial overlays and clean picture-in-picture support graphics
-- `blender` for optional cinematic generated shots when Blender is installed
-
-Best results today:
-
-- short-form explainers, tutorials, essays, and talking-head videos
-- beats with clear process, contrast, numbers, or "how it works" structure
-- windows roughly `2.6s` to `4.0s` long where a custom visual can actually breathe
-
-Vex deliberately tries to skip weak beats instead of forcing generic filler.
-
-### Export and delivery
+### Export and Delivery
 
 - Export with built-in presets for YouTube, Instagram, TikTok, X, and podcast audio
-- Export directly from the REPL or from the CLI
-- Estimate output size and check disk space before export
-
-### Project system
-
-- Persistent saved projects
-- Auto-load a project when you mention a known video path
-- Deterministic project loading
-- Undo and redo through timeline rebuild
-- Timeline inspection and project summaries
-
-## The Intended Experience
-
-This is the default workflow:
-
-```text
-> vex
-
-[Vex banner]
-Vex > trim the first 30 seconds of "D:\videos\clip.mp4"
-Vex > remove awkward pauses
-Vex > burn subtitles
-Vex > export it for instagram
-Vex > /quit
-```
-
-You do not need to type subcommands inside the session.
-
-If no project is loaded, include a video path in your first message and Vex handles the rest.
-
-During each turn, Vex shows a live status spinner with the active tool name. If you want the deeper activity log afterward, use `/trace`.
-
-## Installation
-
-### Requirements
-
-- Python 3.11+
-- FFmpeg installed and available on `PATH`
-- `yt-dlp` available through the Python environment for YouTube downloads
-- `manim` is recommended if you want the richest diagram-style generated visuals via `add_auto_visuals`
-- `blender` is optional if you want cinematic generated replacement shots; set `BLENDER_PATH` if it is not already on `PATH`
-
-FFmpeg install:
-
-- macOS: `brew install ffmpeg`
-- Ubuntu/Debian: `sudo apt install ffmpeg`
-- Windows: install from `https://ffmpeg.org/download.html` and add `ffmpeg/bin` to `PATH`
-
-### Install Vex
-
-```bash
-git clone https://github.com/AKMessi/vex.git
-cd vex
-pip install -e .
-```
-
-Base install keeps optional Manim and Whisper packages out of the core environment. Add extras when you need those workflows:
-
-```bash
-pip install -e ".[manim]"
-pip install -e ".[transcription]"
-pip install -e ".[full]"
-```
-
-For local development, install the full toolchain and test tools:
-
-```bash
-pip install -e ".[full,dev]"
-```
-
-After install, you should be able to launch Vex with:
-
-```bash
-vex
-```
-
-### Windows PATH note
-
-If `vex` is not recognized after install, add your Python Scripts directory to `PATH`.
-
-Example:
-
-```text
-C:\Users\aarya\AppData\Roaming\Python\Python314\Scripts
-```
-
-Your path may differ depending on your Python installation.
-
-## Configuration
-
-Copy the environment example:
-
-```bash
-cp .env.example .env
-```
-
-On Windows PowerShell:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Then configure your provider.
-
-### Default provider
-
-Vex defaults to Gemini.
-
-```env
-PROVIDER=gemini
-GEMINI_API_KEY=your_key_here
-GEMINI_MODEL=gemma-4-31b-it
-```
-
-### Claude support
-
-If you want Claude instead:
-
-```env
-PROVIDER=claude
-ANTHROPIC_API_KEY=your_key_here
-```
-
-### Important settings
-
-- `PROVIDER`
-- `GEMINI_API_KEY`
-- `GEMINI_MODEL`
-- `ANTHROPIC_API_KEY`
-- `CLAUDE_MODEL`
-- `PEXELS_API_KEY`
-- `AGENT_PROJECTS_DIR`
-- `FFMPEG_PATH`
-- `BLENDER_PATH`
-- `WHISPER_MODEL`
-- `FFMPEG_COMMAND_TIMEOUT_SEC`
-- `FFMPEG_EXPORT_TIMEOUT_SEC`
-- `BLENDER_RENDER_TIMEOUT_SEC`
-
-## Quick Start
-
-### First run
-
-```bash
-vex
-```
-
-Then type a normal sentence with a video path:
-
-```text
-Vex > trim the first 30 seconds of "D:\videos\clip.mp4"
-```
-
-Then continue naturally:
-
-```text
-Vex > remove the silent pauses
-Vex > add "DealScout" at the bottom for the first 4 seconds
-Vex > export it for youtube
-Vex > /quit
-```
-
-### If a project already exists
-
-- If exactly one saved project exists, Vex resumes it automatically
-- If multiple saved projects exist, Vex starts clean and waits for a file path or an explicit project command
-- If you mention a video path that already belongs to a saved project, Vex reuses that project instead of creating a duplicate
+- Export from the web app, REPL, or CLI
+- Keep `latest_export` and `export_history` artifacts in project state
+- Download the current working video or latest export from the web UI
 
 ## Natural-Language Examples
 
-### Basic trim
-
 ```text
-Vex > trim the first 15 seconds of "D:\videos\intro.mp4"
-```
-
-### Speed up a section
-
-```text
-Vex > speed up the section from 1:10 to 1:35 by 1.25x
-```
-
-### Remove pauses
-
-```text
+Vex > trim this from 00:05 to 00:18
+Vex > cut out 00:12 to 00:19
 Vex > remove the silent gaps
-```
-
-### Add subtitles
-
-```text
-Vex > transcribe this video
-Vex > burn subtitles in yellow at the bottom
-```
-
-### Summarize a long video
-
-```text
+Vex > add subtitles and burn them at the bottom
+Vex > mute the audio from 00:10 to 00:14
 Vex > make this a 60 second highlight reel
-```
-
-### Create viral-style shorts
-
-```text
 Vex > turn this podcast into 4 YouTube Shorts with captions
-```
-
-### Create shorts from a YouTube link
-
-```text
-Vex > make 3 shorts from https://www.youtube.com/watch?v=example123
-```
-
-### Add stock B-roll automatically
-
-```text
-Vex > add auto b-roll from Pexels to this video
-Vex > add 4 stock cutaways that match the narration
-```
-
-### Add generated visuals automatically
-
-```text
-Vex > add precise generated visuals wherever the explanation needs them
-Vex > create custom animations for the key claims and process steps in this video
-Vex > use clean product-style generated visuals for the UI explanations
-```
-
-`add_auto_visuals` now uses a transcript-aware planner, premium template upgrades, renderer auto-selection, and a Manim-first generation path. Today it can choose between:
-
-- `manim` for diagrams, flows, comparisons, and data-heavy explainer visuals
-- `ffmpeg` for fast, clean editorial cards and picture-in-picture support graphics
-- `blender` for cinematic replacement visuals when Blender is installed
-
-Suggested prompts:
-
-```text
-Vex > add auto visuals
-Vex > add custom animations only where they make the explanation clearer
-Vex > use generated visuals for the process beats and keep everything else clean
-```
-
-### Export for social
-
-```text
-Vex > export it for instagram
+Vex > add stock cutaways that match the narration
+Vex > add precise generated visuals where the explanation needs them
+Vex > export this for YouTube 1080p
 ```
 
 ## Full Tool Surface
-
-These are the editing tools Vex exposes to the agent loop.
 
 | Tool | What it does |
 |---|---|
 | `get_video_info` | Reads duration, resolution, fps, codec, audio presence, format, and size |
 | `trim_clip` | Trims the current working video to a selected range |
+| `remove_segment` | Removes a middle time range and joins the remaining footage |
 | `merge_clips` | Concatenates the current working clip with one or more external clips |
 | `adjust_speed` | Changes playback speed globally or for a selected segment |
-| `add_transition` | Adds `fade_in`, `fade_out`, or fade-through-black style transitions |
+| `add_transition` | Adds `fade_in`, `fade_out`, or fade-through-black transitions |
 | `add_text_overlay` | Adds timed text overlays to the video |
 | `extract_audio` | Exports audio from the current working video |
 | `replace_audio` | Replaces or mixes audio with an external track |
 | `mute_segment` | Silences audio in a selected time range |
-| `trim_silence` | Detects and removes dead-air pauses while preserving natural speech handles by default |
-| `burn_subtitles` | Burns subtitles from an SRT file directly into the video |
-| `transcribe_video` | Generates `transcript.txt` and `transcript.srt` using Whisper |
+| `trim_silence` | Detects and removes dead-air pauses while preserving speech handles |
+| `transcribe_video` | Creates transcript artifacts with Gemini video input or optional Whisper fallback |
+| `burn_subtitles` | Burns subtitles from an SRT file into the video |
 | `summarize_clip` | Uses transcript-aware LLM selection to build a shorter highlight cut |
-| `create_auto_shorts` | Builds multiple ranked vertical shorts with transcript analysis, captions, metadata, and a manifest bundle |
-| `add_auto_broll` | Plans subtitle-aligned B-roll beats, reranks matching Pexels stock clips against transcript context, and splices them into the current working video |
-| `add_auto_visuals` | Scores transcript beats, avoids stale or low-signal inserts, generates custom visuals with the best supported renderer, and composites them back into the working video |
-| `export_video` | Exports the working video with a named preset |
+| `create_auto_shorts` | Builds ranked vertical shorts with captions, metadata, and a manifest bundle |
+| `add_auto_broll` | Plans, fetches, reranks, and splices Pexels B-roll into the working video |
+| `add_auto_visuals` | Plans generated visuals, renders them with the best supported renderer, and composites them into the video |
+| `export_video` | Exports the working video with a named preset and records latest export artifacts |
 | `undo` | Rebuilds the project without the last operation |
 | `redo` | Reapplies the most recently undone operation |
 
-Inside the REPL, you can also use `/trace` to inspect the latest recorded agent trace for the current project.
+Inside the REPL, use `/trace` to inspect the latest recorded agent trace for the current project.
 
 ## CLI Commands
 
-Vex supports both a conversational mode and explicit power-user commands.
+| Command | Purpose |
+|---|---|
+| `vex` | Start the interactive REPL |
+| `vex web` | Start the local browser app |
+| `vex start <video_path>` | Create a project and open the REPL |
+| `vex repl [--project TEXT]` | Open the REPL for an existing project |
+| `vex run "<instruction>" --project TEXT` | Run one instruction and exit |
+| `vex projects` | List saved projects |
+| `vex export <preset> --project TEXT` | Export without entering the REPL |
+| `vex shorts` | Generate a packaged shorts bundle from an existing project |
+| `vex auto-broll` | Apply Pexels-backed stock footage inserts |
+| `vex auto-visuals` | Apply generated supporting visuals |
+| `vex youtube-shorts` | Download a YouTube video and run auto shorts |
+| `vex --version` | Show the installed version |
 
-### `vex`
-
-Start the interactive REPL.
-
-### `vex shorts`
-
-Generate a packaged shorts bundle directly from an existing project.
-
-```bash
-vex shorts --project <project-id> --count 4 --target-platform youtube_shorts
-```
-
-### `vex auto-broll`
-
-Plan and apply Pexels-backed stock footage inserts to an existing project.
-
-```bash
-vex auto-broll --project <project-id> --max-overlays 5
-```
-
-### `vex auto-visuals`
-
-Plan and apply generated supporting visuals to an existing project.
+### Web Command
 
 ```bash
-vex auto-visuals --project <project-id> --max-visuals 4 --renderer auto --style-pack editorial_clean
+vex web [--project <project-id>] [--host 127.0.0.1] [--port 8765] [--open/--no-open]
 ```
 
-### `vex youtube-shorts`
+The web app uses local HTTP endpoints for upload, project state, media preview, downloads, and Server-Sent Events job progress.
 
-Download a YouTube video and immediately run the auto shorts workflow.
-
-```bash
-vex youtube-shorts "https://www.youtube.com/watch?v=example123" --count 4
-```
-
-- resumes the only saved project automatically
-- otherwise waits for natural-language input
-- if no video is loaded, include a file path in your message
-
-### `vex start <video_path> [--name TEXT]`
-
-Create a new project explicitly and open the REPL.
-
-```bash
-vex start "D:\videos\clip.mp4" --name "Launch Cut"
-```
-
-### `vex repl [--project TEXT]`
-
-Open the REPL for an existing project.
-
-```bash
-vex repl
-vex repl --project 7e5a4d1c
-```
-
-### `vex run "<instruction>" --project TEXT`
-
-Run a single instruction against a saved project and exit.
-
-```bash
-vex run "export it for instagram" --project 7e5a4d1c
-```
-
-### `vex projects`
-
-List saved projects.
-
-### `vex export <preset_name> --project TEXT [--output TEXT]`
-
-Export without entering the REPL.
-
-```bash
-vex export instagram_reels --project 7e5a4d1c --output "D:\exports\clip.mp4"
-```
-
-### `vex --version`
-
-Show the installed version.
-
-## REPL Slash Commands
-
-These commands work only inside the interactive session.
+### REPL Slash Commands
 
 | Command | Action |
 |---|---|
@@ -457,38 +311,38 @@ These commands work only inside the interactive session.
 | `/export <preset>` | Export immediately with a preset |
 | `/provider` | Show the active provider and model |
 | `/projects` | List saved projects |
+| `/trace` | Show the latest agent trace |
 | `/help` | Show available slash commands |
 | `/quit` or `/exit` | Save and exit |
 
 ## Export Presets
 
-Built-in presets:
-
 | Preset | Description | Format |
 |---|---|---|
 | `youtube_1080p` | YouTube 1080p HD | `mp4` |
 | `youtube_4k` | YouTube 4K UHD | `mp4` |
-| `instagram_reels` | Instagram Reels / Stories vertical | `mp4` |
+| `instagram_reels` | Instagram Reels and Stories vertical | `mp4` |
 | `instagram_square` | Instagram square feed | `mp4` |
 | `tiktok` | TikTok vertical | `mp4` |
-| `twitter_x` | X / Twitter landscape | `mp4` |
+| `twitter_x` | X landscape | `mp4` |
 | `podcast_audio` | Audio-only podcast export | `mp3` |
 | `custom` | Start from your own settings | variable |
 
-## How Project Loading Works
+## Project Storage
 
-- Vex never edits the original source file directly
-- each project stores:
-  - original source path
-  - working copy path
-  - timeline operations
-  - provider and model
-  - session log
-  - metadata
-- when you mention a video path in the REPL:
-  - Vex checks for an existing project for that exact source file
-  - if found, it loads that project
-  - otherwise, it creates a new project automatically
+Vex never edits the original source file directly.
+
+Each project stores:
+
+- original source path or source URL
+- source copy in the project directory
+- current working file
+- timeline operations
+- redo stack
+- session log
+- metadata
+- provider and model
+- artifacts such as transcripts, latest export, export history, B-roll manifests, shorts manifests, and trace logs
 
 Default project storage:
 
@@ -496,39 +350,74 @@ Default project storage:
 ~/.video-agent/projects/
 ```
 
-You can override that with `AGENT_PROJECTS_DIR`.
+Override it with:
+
+```env
+AGENT_PROJECTS_DIR=D:\vex-projects
+```
 
 ## Architecture
 
 | Path | Responsibility |
 |---|---|
-| `main.py` | CLI, REPL, auto-loading, slash commands, and live terminal status UI |
+| `main.py` | CLI, REPL, web command, project loading, slash commands, and terminal status UI |
+| `web_app.py` | Local HTTP server, upload intake, project API, SSE jobs, media streaming, and downloads |
+| `web_static/` | Browser UI for chat, video preview, collapsed tool progress, uploads, exports, and Tips & Tricks |
 | `agent.py` | Provider-agnostic agent loop and tool orchestration |
+| `agent_trace.py` | Trace event recording for terminal and web progress |
 | `providers/` | Gemini and Claude adapters behind one interface |
-| `tools/` | Agent-callable editing tools |
+| `prompts.py` | System prompt and tool schemas |
+| `tools/` | Agent-callable editing tools and state updates |
 | `engine.py` | FFmpeg and MoviePy operations |
 | `state.py` | Persistent project state and timeline history |
-| `visual_intelligence.py` | Transcript beat mining, visual planning, and renderer-aware spec normalization |
+| `sources.py` | YouTube source loading and project reuse |
+| `visual_intelligence.py` | Transcript beat mining, visual planning, and renderer-aware normalization |
 | `renderers/` | Generated-visual backends for Manim, FFmpeg, and optional Blender |
 | `vex_manim/` | Manim scene briefs, blueprinting, runtime helpers, validation, and QA |
 | `presets/export_presets.json` | Built-in export presets |
+| `tests/` | API, engine, config, visual IR, and web app coverage |
+
+## Web API Summary
+
+The web app is local-only by default and binds to `127.0.0.1`.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/state` | Current provider, model, projects, selected project, and UI-ready project summary |
+| `POST /api/upload` | Raw binary upload with filename headers and progress support |
+| `POST /api/load` | Load a local path or YouTube URL |
+| `POST /api/new-session` | Clear the selected project in the UI |
+| `POST /api/select` | Select a recent project |
+| `POST /api/jobs` | Start an agent run and return a `job_id` immediately |
+| `GET /api/jobs/<job_id>/events` | Stream job events over Server-Sent Events |
+| `GET /api/projects/<id>/media/current` | Stream the current working video |
+| `GET /api/projects/<id>/download/current` | Download the current working video |
+| `GET /api/projects/<id>/download/latest-export` | Download the latest export when one exists |
+
+One active job is allowed per project. Starting another job for the same project while one is running returns `409`.
 
 ## Dependencies and Runtime Notes
 
-### FFmpeg is mandatory
+### FFmpeg
 
-Vex depends on FFmpeg for:
+FFmpeg is mandatory for metadata probing, trims, merges, audio processing, subtitle burn-in, silence detection, B-roll compositing, and exports.
 
-- metadata probing
-- trims and merges
-- audio processing
-- subtitle burn-in
-- silence detection
-- exports
+### Gemini Video Transcription
 
-### Whisper is optional
+When using Gemini and the clip fits the configured inline limits, `transcribe_video` sends the video directly to Gemini and writes `transcript.txt` plus `transcript.srt`.
 
-`transcribe_video` requires `openai-whisper` and a local environment capable of running it.
+Defaults:
+
+```env
+GEMINI_TRANSCRIPT_MAX_INLINE_MB=100
+GEMINI_TRANSCRIPT_MAX_INLINE_DURATION_SEC=90
+```
+
+Use Whisper for longer clips, larger files, local-only transcription, or provider fallback.
+
+### Whisper
+
+Whisper is optional.
 
 Install it with:
 
@@ -536,9 +425,9 @@ Install it with:
 pip install -e ".[transcription]"
 ```
 
-### Manim is optional
+### Manim
 
-`add_auto_visuals` can use the FFmpeg renderer without Manim, but premium generated scenes require Manim.
+`add_auto_visuals` can use the FFmpeg renderer without Manim. Premium generated scenes require Manim.
 
 Install it with:
 
@@ -546,83 +435,78 @@ Install it with:
 pip install -e ".[manim]"
 ```
 
-### Text overlays on Windows may require ImageMagick
+### MoviePy
 
-MoviePy text rendering on Windows can require ImageMagick.
+Text overlays use MoviePy. The code includes compatibility handling for current MoviePy APIs and older MoviePy installs.
 
-If timed text overlays fail, install it from:
+### Subtitle Burning
 
-```text
-https://imagemagick.org/script/download.php#windows
-```
-
-### Subtitle burning depends on FFmpeg subtitle support
-
-Most FFmpeg builds support the `subtitles` filter. If yours does not, subtitle burn-in may fail until you install a build with subtitle filter support.
+Subtitle burn-in depends on FFmpeg builds that include the `subtitles` filter.
 
 ## Troubleshooting
 
-### `vex` is not recognized
+### `vex` Is Not Recognized
 
 Add your Python Scripts directory to `PATH`, then restart the terminal.
 
-### `FFmpeg was not found in PATH`
+### `FFmpeg Was Not Found In PATH`
 
-Install FFmpeg and verify `ffmpeg` works in the terminal before launching Vex.
+Install FFmpeg and verify this works before launching Vex:
 
-### Vex says no video is loaded
-
-Start with a normal sentence that includes a file path:
-
-```text
-Vex > trim the first 10 seconds of "D:\videos\clip.mp4"
+```bash
+ffmpeg -version
 ```
 
-### Subtitle burn-in fails
+### Web Upload Fails
 
 Check that:
 
-- your `transcript.srt` exists
+- the file extension is supported
+- the file is smaller than `VEX_WEB_MAX_UPLOAD_MB`
+- the browser is connected to the same local server process
+
+### The Agent Says The API Key Is Invalid
+
+Update the active provider key in `.env`, then restart `vex web` or the REPL.
+
+For Gemini:
+
+```env
+PROVIDER=gemini
+GEMINI_API_KEY=your_real_key
+```
+
+### Transcription Fails
+
+Check that:
+
+- the active Gemini model supports video input if using Gemini transcription
+- the video fits `GEMINI_TRANSCRIPT_MAX_INLINE_MB` and `GEMINI_TRANSCRIPT_MAX_INLINE_DURATION_SEC`
+- Whisper is installed if you selected or need local fallback
+
+### Subtitle Burn-In Fails
+
+Check that:
+
+- `transcript.srt` exists
 - your FFmpeg build supports the `subtitles` filter
 - the subtitle path is valid on your OS
 
-### Text overlay fails on Windows
+### Text Overlay Fails
 
-Install ImageMagick and retry.
+Check MoviePy and local font/rendering support. On some Windows setups, ImageMagick may still be needed for older MoviePy text rendering paths.
 
-### Transcription fails
+## Development
 
-Make sure Whisper is installed and usable in your Python environment.
-
-### Summarization does not work
-
-Make sure:
-
-- the active provider API key is configured
-- transcription completed successfully
-- `transcript.txt` and `transcript.srt` exist in the project working directory
-
-## Contributing
-
-Issues and PRs are welcome.
-
-### Developer setup
-
-Use the base development install when you only need the core app, linting, typing, and tests:
+Run focused checks:
 
 ```bash
-pip install -e ".[dev]"
+python -m py_compile main.py engine.py web_app.py config.py
+python -m ruff check main.py engine.py web_app.py config.py tools/export.py tests/test_web_app.py tests/test_config_and_visual_ir.py
+python -m pytest
 ```
 
-Use the full development install when you also need Manim scenes and Whisper transcription:
-
-```bash
-pip install -e ".[full,dev]"
-```
-
-FFmpeg must be available on `PATH` for media tests and real editing workflows. Manim and Whisper are optional for the base install, but required for premium generated visuals and local transcription.
-
-Before opening a PR, run:
+Before opening a PR:
 
 ```bash
 python -m pytest -q
@@ -634,10 +518,10 @@ If you report a bug, include:
 
 - OS
 - Python version
-- active provider
-- the exact command or REPL input
-- the traceback or terminal output
-- whether the issue happens on a fresh project or a resumed project
+- active provider and model
+- exact command, prompt, or web action
+- traceback or browser-visible error
+- whether the issue happens on a fresh project or resumed project
 
 ## License
 

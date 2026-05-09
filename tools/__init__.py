@@ -4,6 +4,7 @@ from tools import (
     audio,
     auto_shorts,
     auto_visuals,
+    cut,
     export,
     info,
     merge,
@@ -22,6 +23,7 @@ from tools import (
 TOOL_EXECUTORS = {
     "get_video_info": info.execute,
     "trim_clip": trim.execute,
+    "remove_segment": cut.execute,
     "merge_clips": merge.execute,
     "adjust_speed": speed.execute,
     "add_transition": transitions.execute,

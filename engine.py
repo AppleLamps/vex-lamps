@@ -17,7 +17,11 @@ from pathlib import Path
 from typing import Any
 
 import ffmpeg
-from moviepy.editor import ColorClip, CompositeVideoClip, TextClip, VideoFileClip
+
+try:
+    from moviepy.editor import ColorClip, CompositeVideoClip, TextClip, VideoFileClip
+except ModuleNotFoundError:
+    from moviepy import ColorClip, CompositeVideoClip, TextClip, VideoFileClip
 
 import config
 
@@ -70,6 +74,25 @@ def _run_ffmpeg(stream, message: str) -> None:
     command = ffmpeg.compile(stream, cmd=config.FFMPEG_PATH, overwrite_output=True)
     LOGGER.debug("Running ffmpeg command: %s", " ".join(command))
     _run_command(command, message)
+
+
+def _clip_with(clip, new_method: str, old_method: str, *args):
+    method = getattr(clip, new_method, None) or getattr(clip, old_method, None)
+    if method is None:
+        raise VideoEngineError(f"MoviePy clip does not support {new_method} or {old_method}.")
+    return method(*args)
+
+
+def _make_text_clip(text: str, font_size: int, color: str, width: int):
+    common = {
+        "color": color,
+        "method": "caption",
+        "size": (width, None),
+    }
+    try:
+        return TextClip(text=text, font_size=font_size, **common)
+    except TypeError:
+        return TextClip(text, fontsize=font_size, **common)
 
 
 def parse_timestamp(value) -> float:
@@ -319,6 +342,25 @@ def extract_segments(
     return merge(trimmed_paths, working_dir)
 
 
+def remove_segment(
+    input_path: str,
+    working_dir: str,
+    start_sec: float,
+    end_sec: float,
+    input_duration_sec: float | None = None,
+) -> str:
+    duration = input_duration_sec if input_duration_sec is not None else probe_video(input_path)["duration_sec"]
+    duration = max(float(duration), 0.0)
+    start_sec = max(0.0, min(float(start_sec), duration))
+    end_sec = max(0.0, min(float(end_sec), duration))
+    if end_sec <= start_sec:
+        raise VideoEngineError("Remove segment end must be after start.")
+    keep_ranges = _invert_time_ranges(duration, [(start_sec, end_sec)])
+    if not keep_ranges:
+        raise VideoEngineError("Cannot remove the full clip. Use trim_clip to keep a shorter range instead.")
+    return extract_segments(input_path, working_dir, keep_ranges)
+
+
 def _speed_audio_filter(factor: float) -> str:
     filters: list[str] = []
     remaining = factor
@@ -341,54 +383,70 @@ def adjust_speed(
     input_duration_sec: float | None = None,
 ) -> str:
     output_path = _unique_path(working_dir, ".mp4")
+    metadata = probe_video(input_path)
+    has_audio = bool(metadata.get("has_audio"))
     if segment_start is None and segment_end is None:
-        command = [
-            config.FFMPEG_PATH,
-            "-i",
-            input_path,
-            "-filter_complex",
-            f"[0:v]setpts={1/factor:.8f}*PTS[v];[0:a]{_speed_audio_filter(factor)}[a]",
-            "-map",
-            "[v]",
-            "-map",
-            "[a]",
-            "-c:v",
-            "libx264",
-            "-c:a",
-            "aac",
-            "-y",
-            output_path,
-        ]
+        command = [config.FFMPEG_PATH, "-i", input_path]
+        if has_audio:
+            command.extend(
+                [
+                    "-filter_complex",
+                    f"[0:v]setpts={1/factor:.8f}*PTS[v];[0:a]{_speed_audio_filter(factor)}[a]",
+                    "-map",
+                    "[v]",
+                    "-map",
+                    "[a]",
+                    "-c:v",
+                    "libx264",
+                    "-c:a",
+                    "aac",
+                ]
+            )
+        else:
+            command.extend(
+                [
+                    "-vf",
+                    f"setpts={1/factor:.8f}*PTS",
+                    "-an",
+                    "-c:v",
+                    "libx264",
+                ]
+            )
+        command.extend(["-y", output_path])
         _run_command(command, "Failed to adjust video speed")
         return output_path
 
     start = segment_start or 0.0
-    end = segment_end if segment_end is not None else (input_duration_sec or probe_video(input_path)["duration_sec"])
-    filter_complex = (
-        f"[0:v]split=3[v1][v2][v3];"
-        f"[0:a]asplit=3[a1][a2][a3];"
-        f"[v1]trim=0:{start},setpts=PTS-STARTPTS[v1o];"
-        f"[a1]atrim=0:{start},asetpts=PTS-STARTPTS[a1o];"
-        f"[v2]trim={start}:{end},setpts={1/factor:.8f}*(PTS-STARTPTS)[v2o];"
-        f"[a2]atrim={start}:{end},asetpts=PTS-STARTPTS,{_speed_audio_filter(factor)}[a2o];"
-        f"[v3]trim={end},setpts=PTS-STARTPTS[v3o];"
-        f"[a3]atrim={end},asetpts=PTS-STARTPTS[a3o];"
-        f"[v1o][a1o][v2o][a2o][v3o][a3o]concat=n=3:v=1:a=1[v][a]"
-    )
+    end = segment_end if segment_end is not None else (input_duration_sec or metadata["duration_sec"])
+    if has_audio:
+        filter_complex = (
+            f"[0:v]split=3[v1][v2][v3];"
+            f"[0:a]asplit=3[a1][a2][a3];"
+            f"[v1]trim=0:{start},setpts=PTS-STARTPTS[v1o];"
+            f"[a1]atrim=0:{start},asetpts=PTS-STARTPTS[a1o];"
+            f"[v2]trim={start}:{end},setpts={1/factor:.8f}*(PTS-STARTPTS)[v2o];"
+            f"[a2]atrim={start}:{end},asetpts=PTS-STARTPTS,{_speed_audio_filter(factor)}[a2o];"
+            f"[v3]trim={end},setpts=PTS-STARTPTS[v3o];"
+            f"[a3]atrim={end},asetpts=PTS-STARTPTS[a3o];"
+            f"[v1o][a1o][v2o][a2o][v3o][a3o]concat=n=3:v=1:a=1[v][a]"
+        )
+        map_args = ["-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-c:a", "aac"]
+    else:
+        filter_complex = (
+            f"[0:v]split=3[v1][v2][v3];"
+            f"[v1]trim=0:{start},setpts=PTS-STARTPTS[v1o];"
+            f"[v2]trim={start}:{end},setpts={1/factor:.8f}*(PTS-STARTPTS)[v2o];"
+            f"[v3]trim={end},setpts=PTS-STARTPTS[v3o];"
+            f"[v1o][v2o][v3o]concat=n=3:v=1:a=0[v]"
+        )
+        map_args = ["-map", "[v]", "-an", "-c:v", "libx264"]
     command = [
         config.FFMPEG_PATH,
         "-i",
         input_path,
         "-filter_complex",
         filter_complex,
-        "-map",
-        "[v]",
-        "-map",
-        "[a]",
-        "-c:v",
-        "libx264",
-        "-c:a",
-        "aac",
+        *map_args,
         "-y",
         output_path,
     ]
@@ -398,21 +456,12 @@ def adjust_speed(
 
 def fade_in(input_path: str, working_dir: str, duration: float) -> str:
     output_path = _unique_path(working_dir, ".mp4")
-    command = [
-        config.FFMPEG_PATH,
-        "-i",
-        input_path,
-        "-vf",
-        f"fade=t=in:st=0:d={duration}",
-        "-af",
-        f"afade=t=in:st=0:d={duration}",
-        "-c:v",
-        "libx264",
-        "-c:a",
-        "aac",
-        "-y",
-        output_path,
-    ]
+    command = [config.FFMPEG_PATH, "-i", input_path, "-vf", f"fade=t=in:st=0:d={duration}"]
+    if probe_video(input_path).get("has_audio"):
+        command.extend(["-af", f"afade=t=in:st=0:d={duration}", "-c:a", "aac"])
+    else:
+        command.append("-an")
+    command.extend(["-c:v", "libx264", "-y", output_path])
     _run_command(command, "Failed to add fade in")
     return output_path
 
@@ -421,21 +470,12 @@ def fade_out(input_path: str, working_dir: str, duration: float) -> str:
     output_path = _unique_path(working_dir, ".mp4")
     clip_info = probe_video(input_path)
     start = max(clip_info["duration_sec"] - duration, 0.0)
-    command = [
-        config.FFMPEG_PATH,
-        "-i",
-        input_path,
-        "-vf",
-        f"fade=t=out:st={start}:d={duration}",
-        "-af",
-        f"afade=t=out:st={start}:d={duration}",
-        "-c:v",
-        "libx264",
-        "-c:a",
-        "aac",
-        "-y",
-        output_path,
-    ]
+    command = [config.FFMPEG_PATH, "-i", input_path, "-vf", f"fade=t=out:st={start}:d={duration}"]
+    if clip_info.get("has_audio"):
+        command.extend(["-af", f"afade=t=out:st={start}:d={duration}", "-c:a", "aac"])
+    else:
+        command.append("-an")
+    command.extend(["-c:v", "libx264", "-y", output_path])
     _run_command(command, "Failed to add fade out")
     return output_path
 
@@ -444,28 +484,39 @@ def crossfade(input1: str, input2: str, working_dir: str, duration: float) -> st
     output_path = _unique_path(working_dir, ".mp4")
     clip_info = probe_video(input1)
     offset = max(clip_info["duration_sec"] - duration, 0.0)
-    command = [
-        config.FFMPEG_PATH,
-        "-i",
-        input1,
-        "-i",
-        input2,
-        "-filter_complex",
-        (
-            f"[0:v][1:v]xfade=transition=fade:duration={duration}:offset={offset}[v];"
-            f"[0:a][1:a]acrossfade=d={duration}[a]"
-        ),
-        "-map",
-        "[v]",
-        "-map",
-        "[a]",
-        "-c:v",
-        "libx264",
-        "-c:a",
-        "aac",
-        "-y",
-        output_path,
-    ]
+    input2_info = probe_video(input2)
+    command = [config.FFMPEG_PATH, "-i", input1, "-i", input2]
+    if clip_info.get("has_audio") and input2_info.get("has_audio"):
+        command.extend(
+            [
+                "-filter_complex",
+                (
+                    f"[0:v][1:v]xfade=transition=fade:duration={duration}:offset={offset}[v];"
+                    f"[0:a][1:a]acrossfade=d={duration}[a]"
+                ),
+                "-map",
+                "[v]",
+                "-map",
+                "[a]",
+                "-c:v",
+                "libx264",
+                "-c:a",
+                "aac",
+            ]
+        )
+    else:
+        command.extend(
+            [
+                "-filter_complex",
+                f"[0:v][1:v]xfade=transition=fade:duration={duration}:offset={offset}[v]",
+                "-map",
+                "[v]",
+                "-an",
+                "-c:v",
+                "libx264",
+            ]
+        )
+    command.extend(["-y", output_path])
     _run_command(command, "Failed to crossfade clips")
     return output_path
 
@@ -483,41 +534,50 @@ def add_text(
 ) -> str:
     output_path = _unique_path(working_dir, ".mp4")
     base = VideoFileClip(input_path)
-    duration = max(end_sec - start_sec, 0.0)
-    text_clip = TextClip(text, fontsize=font_size, color=color, method="caption", size=(int(base.w * 0.8), None))
-    text_clip = text_clip.set_start(start_sec).set_duration(duration)
-    pos_map = {
-        "top": ("center", "top"),
-        "center": ("center", "center"),
-        "bottom": ("center", "bottom"),
-        "top_left": ("left", "top"),
-        "top_right": ("right", "top"),
-        "bottom_left": ("left", "bottom"),
-        "bottom_right": ("right", "bottom"),
-    }
-    text_clip = text_clip.set_position(pos_map[position])
-    layers = [base]
-    if bg_opacity > 0:
-        background = (
-            ColorClip(size=(text_clip.w + 40, text_clip.h + 20), color=(0, 0, 0))
-            .set_opacity(bg_opacity)
-            .set_start(start_sec)
-            .set_duration(duration)
-            .set_position(pos_map[position])
+    final = None
+    text_clip = None
+    background = None
+    try:
+        duration = max(end_sec - start_sec, 0.0)
+        text_clip = _make_text_clip(text, font_size, color, int(base.w * 0.8))
+        text_clip = _clip_with(text_clip, "with_start", "set_start", start_sec)
+        text_clip = _clip_with(text_clip, "with_duration", "set_duration", duration)
+        pos_map = {
+            "top": ("center", "top"),
+            "center": ("center", "center"),
+            "bottom": ("center", "bottom"),
+            "top_left": ("left", "top"),
+            "top_right": ("right", "top"),
+            "bottom_left": ("left", "bottom"),
+            "bottom_right": ("right", "bottom"),
+        }
+        text_clip = _clip_with(text_clip, "with_position", "set_position", pos_map[position])
+        layers = [base]
+        if bg_opacity > 0:
+            background = ColorClip(size=(text_clip.w + 40, text_clip.h + 20), color=(0, 0, 0))
+            background = _clip_with(background, "with_opacity", "set_opacity", bg_opacity)
+            background = _clip_with(background, "with_start", "set_start", start_sec)
+            background = _clip_with(background, "with_duration", "set_duration", duration)
+            background = _clip_with(background, "with_position", "set_position", pos_map[position])
+            layers.append(background)
+        layers.append(text_clip)
+        final = CompositeVideoClip(layers)
+        final.write_videofile(
+            output_path,
+            codec="libx264",
+            audio_codec="aac",
+            temp_audiofile=str(Path(working_dir) / f"{uuid.uuid4().hex}_temp-audio.m4a"),
+            remove_temp=True,
+            logger=None,
         )
-        layers.append(background)
-    layers.append(text_clip)
-    final = CompositeVideoClip(layers)
-    final.write_videofile(
-        output_path,
-        codec="libx264",
-        audio_codec="aac",
-        temp_audiofile=str(Path(working_dir) / f"{uuid.uuid4().hex}_temp-audio.m4a"),
-        remove_temp=True,
-        logger=None,
-    )
-    base.close()
-    final.close()
+    finally:
+        if background is not None:
+            background.close()
+        if text_clip is not None:
+            text_clip.close()
+        if final is not None:
+            final.close()
+        base.close()
     return output_path
 
 

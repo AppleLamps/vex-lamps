@@ -5,11 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "vex"
 version = "1.0.0"
-description = "Terminal-first AI video editor with transcript-aware auto visuals, stock b-roll, and conversational editing."
+description = "Local AI video editing workspace with a browser UI, CLI, transcript-aware visuals, stock b-roll, and conversational editing."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
-keywords = ["video-editing", "ffmpeg", "manim", "ai-agent", "whisper", "automation"]
+keywords = ["video-editing", "ffmpeg", "manim", "ai-agent", "gemini", "web-ui", "automation"]
 authors = [
   { name = "AKMessi" }
 ]
@@ -45,20 +45,21 @@ full = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/AKMessi/vex"
-Repository = "https://github.com/AKMessi/vex"
-Issues = "https://github.com/AKMessi/vex/issues"
+Homepage = "https://github.com/AppleLamps/vex-lamps"
+Repository = "https://github.com/AppleLamps/vex-lamps"
+Issues = "https://github.com/AppleLamps/vex-lamps/issues"
 
 [project.scripts]
 vex = "main:app"
 
 [tool.setuptools]
 include-package-data = true
-py-modules = ["main", "agent", "agent_trace", "broll_intelligence", "config", "engine", "prompts", "repl", "sources", "state", "ui", "visual_intelligence"]
-packages = ["presets", "providers", "renderers", "tools", "vex_manim"]
+py-modules = ["main", "agent", "agent_trace", "broll_intelligence", "config", "engine", "prompts", "repl", "sources", "state", "ui", "visual_intelligence", "web_app"]
+packages = ["presets", "providers", "renderers", "tools", "vex_manim", "web_static"]
 
 [tool.setuptools.package-data]
 presets = ["*.json"]
+web_static = ["*.html"]
 
 [tool.pytest.ini_options]
 norecursedirs = [

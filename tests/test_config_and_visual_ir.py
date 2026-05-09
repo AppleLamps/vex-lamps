@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from google.genai import types
 
 import config
@@ -41,6 +44,28 @@ def test_gemini_config_keeps_thinking_disabled_only_for_gemma() -> None:
 
     assert generation_config.thinking_config is not None
     assert generation_config.thinking_config.thinking_budget == 0
+
+
+def test_project_dotenv_overrides_stale_process_env(tmp_path, monkeypatch) -> None:
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text(
+        "\n".join(
+            [
+                "PROVIDER=gemini",
+                "GEMINI_API_KEY=repo-key",
+                "GEMINI_MODEL=gemini-test-model",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GEMINI_API_KEY", "stale-process-key")
+    monkeypatch.setattr(config, "load_dotenv", lambda override=False: _load_fake_dotenv(dotenv_path, override))
+
+    settings = config.load_settings_from_env()
+
+    assert settings.gemini_api_key == "repo-key"
+    assert settings.gemini_model == "gemini-test-model"
 
 
 def test_visual_ir_storyboard_uses_semantic_misconception_frame() -> None:
@@ -125,6 +150,13 @@ def test_near_threshold_blueprint_compiler_rejects_severe_layout() -> None:
     )
 
     assert not can_accept_blueprint_compiler_quality(brief, validation, quality, min_quality)
+
+
+def _load_fake_dotenv(path: Path, override: bool = False) -> None:
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, value = line.split("=", 1)
+        if override or key not in os.environ:
+            os.environ[key] = value
 
 
 def _comparison_spec() -> dict:

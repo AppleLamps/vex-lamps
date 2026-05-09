@@ -280,6 +280,38 @@ class VideoAgent:
                             is_error=not bool(result.get("success")),
                         )
                     )
+                    if not bool(result.get("success")):
+                        failure_message = (
+                            f"{result.get('tool_name', call.name)}: "
+                            f"{result.get('message', 'Tool failed without an error message.')}"
+                        )
+                        final_text = (
+                            "I could not complete that edit.\n\n"
+                            f"Actual tool error:\n- {failure_message}"
+                        )
+                        self._emit_trace(
+                            recorder,
+                            trace_callback,
+                            kind="agent",
+                            title="Stopped after tool failure",
+                            detail=truncate_trace_text(failure_message, 180),
+                            status="error",
+                        )
+                        self.conversation.append({"role": "assistant", "content": final_text})
+                        self.state.session_log = self.conversation
+                        self._save_trace_artifact(
+                            recorder,
+                            success=False,
+                            tools_called=tools_called,
+                            final_message=final_text,
+                        )
+                        self.state.save()
+                        return AgentResponse(
+                            message=final_text,
+                            tools_called=tools_called,
+                            suggestions=[],
+                            success=False,
+                        )
                 continue
             final_text = self._inject_tool_failures(response.text.strip(), tool_failures)
             self._emit_trace(

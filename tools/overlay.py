@@ -70,7 +70,7 @@ def execute(params: dict, state: ProjectState) -> dict:
             "updated_state": state,
             "tool_name": "add_text_overlay",
         }
-    except (ValueError, VideoEngineError, OSError, KeyError) as exc:
+    except (ValueError, VideoEngineError, OSError, TypeError, KeyError) as exc:
         return {
             "success": False,
             "message": str(exc),

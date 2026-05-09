@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from datetime import UTC, datetime
 from importlib import resources
 from pathlib import Path
 
@@ -93,6 +94,22 @@ def _is_writable_destination(path: Path) -> bool:
         return False
 
 
+def _record_export(state: ProjectState, *, path: str, preset_name: str, preset: dict, message: str) -> None:
+    artifact = {
+        "path": path,
+        "preset_name": preset_name,
+        "description": preset.get("description", ""),
+        "format": preset.get("format"),
+        "created_at": datetime.now(UTC).replace(microsecond=0).isoformat(),
+        "message": message,
+    }
+    state.artifacts["latest_export"] = artifact
+    history = list(state.artifacts.get("export_history") or [])
+    history.append(artifact)
+    state.artifacts["export_history"] = history[-20:]
+    state.save()
+
+
 def execute(params: dict, state: ProjectState) -> dict:
     try:
         presets = load_presets()
@@ -134,9 +151,11 @@ def execute(params: dict, state: ProjectState) -> dict:
         }
     try:
         saved = export(state.working_file, output_path, preset)
+        message = f"Exported video to {saved}. Estimated size was {estimate / (1024 * 1024):.1f} MB."
+        _record_export(state, path=saved, preset_name=preset_name, preset=preset, message=message)
         return {
             "success": True,
-            "message": f"Exported video to {saved}. Estimated size was {estimate / (1024 * 1024):.1f} MB.",
+            "message": message,
             "suggestion": None,
             "updated_state": state,
             "tool_name": "export_video",
@@ -154,12 +173,14 @@ def execute(params: dict, state: ProjectState) -> dict:
                     continue
                 try:
                     saved = export(state.working_file, str(fallback_path), preset)
+                    message = (
+                        f"Exported video to {saved}. "
+                        f"The original output directory was not writable, so Vex used a fallback export path."
+                    )
+                    _record_export(state, path=saved, preset_name=preset_name, preset=preset, message=message)
                     return {
                         "success": True,
-                        "message": (
-                            f"Exported video to {saved}. "
-                            f"The original output directory was not writable, so Vex used a fallback export path."
-                        ),
+                        "message": message,
                         "suggestion": None,
                         "updated_state": state,
                         "tool_name": "export_video",

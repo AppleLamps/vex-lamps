@@ -281,6 +281,28 @@ def repl(project: str | None = typer.Option(default=None, help="Project id.")) -
 
 
 @app.command()
+def web(
+    project: str | None = typer.Option(default=None, help="Project id."),
+    host: str = typer.Option("127.0.0.1", help="Host to bind."),
+    port: int = typer.Option(8765, help="Port to bind."),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the web console in your browser."),
+) -> None:
+    provider = create_provider()
+    state = find_project(project) if project else None
+    from web_app import run_web_app
+
+    run_web_app(
+        provider=provider,
+        state=state,
+        create_project=create_project,
+        create_project_from_youtube=create_project_from_youtube,
+        host=host,
+        port=port,
+        open_browser=open_browser,
+    )
+
+
+@app.command()
 def run(
     instruction: str,
     project: str = typer.Option(..., help="Project id."),

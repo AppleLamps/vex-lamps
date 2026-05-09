@@ -21,6 +21,8 @@ AGENT_PROJECTS_DIR = os.path.expanduser("~/.video-agent/projects/")
 FFMPEG_PATH = "ffmpeg"
 BLENDER_PATH = "blender"
 WHISPER_MODEL = "base"
+GEMINI_TRANSCRIPT_MAX_INLINE_MB = 100
+GEMINI_TRANSCRIPT_MAX_INLINE_DURATION_SEC = 90
 VERSION = "1.0.0"
 GENAI_TIMEOUT_SEC = 90
 ANTHROPIC_TIMEOUT_SEC = 90.0
@@ -45,6 +47,8 @@ class Settings:
     ffmpeg_path: str = "ffmpeg"
     blender_path: str = "blender"
     whisper_model: str = "base"
+    gemini_transcript_max_inline_mb: int = 100
+    gemini_transcript_max_inline_duration_sec: int = 90
     genai_timeout_sec: int = 90
     anthropic_timeout_sec: float = 90.0
     manim_preview_timeout_sec: int = 75
@@ -57,7 +61,7 @@ class Settings:
 
 
 def load_settings_from_env() -> Settings:
-    load_dotenv()
+    load_dotenv(override=True)
     manim_preview_timeout = max(30, int(os.getenv("MANIM_PREVIEW_TIMEOUT_SEC", "75")))
     return Settings(
         provider=os.getenv("PROVIDER", "gemini").strip().lower(),
@@ -70,6 +74,11 @@ def load_settings_from_env() -> Settings:
         ffmpeg_path=os.getenv("FFMPEG_PATH", "ffmpeg"),
         blender_path=os.getenv("BLENDER_PATH", "blender"),
         whisper_model=os.getenv("WHISPER_MODEL", "base"),
+        gemini_transcript_max_inline_mb=max(1, int(os.getenv("GEMINI_TRANSCRIPT_MAX_INLINE_MB", "100"))),
+        gemini_transcript_max_inline_duration_sec=max(
+            1,
+            int(os.getenv("GEMINI_TRANSCRIPT_MAX_INLINE_DURATION_SEC", "90")),
+        ),
         genai_timeout_sec=max(15, int(os.getenv("GENAI_TIMEOUT_SEC", "90"))),
         anthropic_timeout_sec=max(15.0, float(os.getenv("ANTHROPIC_TIMEOUT_SEC", "90"))),
         manim_preview_timeout_sec=manim_preview_timeout,
@@ -156,6 +165,8 @@ def reload_settings() -> None:
     global FFMPEG_PATH
     global BLENDER_PATH
     global WHISPER_MODEL
+    global GEMINI_TRANSCRIPT_MAX_INLINE_MB
+    global GEMINI_TRANSCRIPT_MAX_INLINE_DURATION_SEC
     global GENAI_TIMEOUT_SEC
     global ANTHROPIC_TIMEOUT_SEC
     global MANIM_PREVIEW_TIMEOUT_SEC
@@ -177,6 +188,8 @@ def reload_settings() -> None:
     FFMPEG_PATH = settings.ffmpeg_path
     BLENDER_PATH = settings.blender_path
     WHISPER_MODEL = settings.whisper_model
+    GEMINI_TRANSCRIPT_MAX_INLINE_MB = settings.gemini_transcript_max_inline_mb
+    GEMINI_TRANSCRIPT_MAX_INLINE_DURATION_SEC = settings.gemini_transcript_max_inline_duration_sec
     GENAI_TIMEOUT_SEC = settings.genai_timeout_sec
     ANTHROPIC_TIMEOUT_SEC = settings.anthropic_timeout_sec
     MANIM_PREVIEW_TIMEOUT_SEC = settings.manim_preview_timeout_sec

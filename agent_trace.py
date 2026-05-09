@@ -70,13 +70,17 @@ class TraceRecorder:
         status: str = "info",
         metadata: dict[str, Any] | None = None,
     ) -> TraceEvent:
+        full_detail = str(detail or "")
+        event_metadata = dict(metadata or {})
+        if full_detail and len(" ".join(full_detail.split())) > 220:
+            event_metadata.setdefault("full_detail", full_detail)
         event = TraceEvent(
             step=len(self.events) + 1,
             kind=kind,
             title=title,
-            detail=truncate_trace_text(detail, 220) if detail else "",
+            detail=truncate_trace_text(full_detail, 220) if full_detail else "",
             status=status,
-            metadata=dict(metadata or {}),
+            metadata=event_metadata,
         )
         self.events.append(event)
         return event

@@ -11,7 +11,7 @@ Rules:
 4. Suggestions must be formatted exactly as: [SUGGESTION]: <text> - reply 'yes' to apply or continue.
 5. Originals are safe. Never modify original source files; use the working copy only.
 6. Reference prior timeline operations by name when relevant.
-7. If the request is ambiguous, ask exactly one clarifying question before acting.
+7. Ask exactly one clarifying question only when a required tool input cannot be inferred from the request or current project state. Otherwise choose conservative defaults and act.
 8. Keep responses plain text, concise, and REPL-friendly.
 9. When the user replies 'yes' after a [SUGGESTION], apply it immediately.
 10. When the user asks for reels, TikToks, YouTube Shorts, viral clips, or auto-cut social highlights, prefer create_auto_shorts over summarize_clip.
@@ -19,6 +19,20 @@ Rules:
 10b. When the user asks for custom-generated animations, precise explanatory visuals, or visuals that should be created on the spot, prefer add_auto_visuals. Let it choose the best supported renderer unless the user explicitly asks for one.
 11. If any tool fails, do not guess the cause from prior conversation. Use the exact tool error message from the latest tool result, and say when you are unsure.
 11a. If a tool fails during a chained workflow, stop and report the failure instead of continuing into downstream dependent tools unless the user explicitly asked to continue with partial results.
+
+Editing tool routing:
+- For concrete edit, export, transcription, subtitle, short-form, B-roll, generated-visual, undo, or redo requests, call tools. Do not only describe the steps.
+- Use trim_clip when the user wants to keep a range, shorten from the start, or start/end at a timestamp.
+- Use remove_segment when the user wants to cut out, delete, or remove a middle section while keeping the rest.
+- Use add_text_overlay for visible titles, labels, callouts, lower thirds, or simple text captions. Use short readable text, a sensible position, and the requested time window.
+- Use transcribe_video before burn_subtitles when subtitles or captions are requested and no SRT path exists. Prefer Gemini video transcription for short clips when available; Whisper is only a local fallback.
+- Use trim_silence for dead air, pauses, silence cleanup, or tightening spoken footage.
+- Use adjust_speed for slow motion, fast motion, speeding up, slowing down, or a timed segment speed change.
+- Use add_transition for fade in, fade out, or fade-through-black requests.
+- Use replace_audio, extract_audio, and mute_segment for audio replacement, extraction, mixing, or muting.
+- Use summarize_clip for one concise highlight reel from a longer video. Use create_auto_shorts for multiple vertical social clips.
+- Use export_video when the user asks to export, render final, make a downloadable file, or prepare for a platform preset.
+- After a successful mutating tool, tell the user what changed. After export_video, mention that the latest export is available for download.
 
 --- CURRENT PROJECT STATE ---
 Project: {project_name}
@@ -52,6 +66,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
                 },
             },
             "required": ["start"],
+        },
+    },
+    {
+        "name": "remove_segment",
+        "description": "Cut out a time range from the middle of the working video and keep the remaining parts joined together.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "start": {
+                    "type": "string",
+                    "description": "Start timestamp of the segment to remove, like '0:30', '30', or '30s'.",
+                },
+                "end": {
+                    "type": "string",
+                    "description": "End timestamp of the segment to remove, like '1:45'.",
+                },
+            },
+            "required": ["start", "end"],
         },
     },
     {
@@ -365,8 +397,18 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     },
     {
         "name": "transcribe_video",
-        "description": "Generate a transcript for the current working video using Whisper.",
-        "parameters": {"type": "object", "properties": {}, "required": []},
+        "description": "Generate a transcript for the current working video. Uses Gemini video input first when available, with Whisper as an optional local fallback.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "engine": {
+                    "type": "string",
+                    "enum": ["auto", "gemini", "whisper"],
+                    "description": "Transcription engine. Default auto prefers Gemini video input and falls back to Whisper.",
+                }
+            },
+            "required": [],
+        },
     },
 ]
 
